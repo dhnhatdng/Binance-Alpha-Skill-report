@@ -1697,12 +1697,31 @@ class Validator:
     @staticmethod
     def _number_matches(val: float, locked_numbers: set) -> bool:
         """True if val is within ±5% relative or ±0.5 absolute of any
-        number in locked_numbers."""
+        number in locked_numbers.
+
+        v0.9.6 Fix #4 (Codex Windows EVAA 2026-06-15 feedback): also
+        match on MAGNITUDE (|val| vs |L|). The narrative regex extracts
+        unsigned digits — e.g. "余额 -591" parses as 591. The locked
+        field is signed (`balance_tokens: -590.5980...`). Pre-v0.9.6,
+        591 vs -590.598 failed both relative (591 + 590.598 = 1181.6,
+        ratio 2.0 ≫ 5%) and absolute (>0.5) checks, hard-failing the
+        render with V_NARRATIVE_NUMERIC_HALLUCINATION even though the
+        narrative was correctly referring to the locked quantity.
+        Magnitude fallback closes this false positive.
+        """
+        val_abs = abs(val)
         for L in locked_numbers:
             denom = max(abs(L), 1.0)
+            # Signed exact (or near) match: original behavior.
             if abs(val - L) / denom <= 0.05:
                 return True
             if abs(val - L) <= 0.5:
+                return True
+            # Magnitude fallback: narrative may strip the sign.
+            L_abs = abs(L)
+            if abs(val_abs - L_abs) / denom <= 0.05:
+                return True
+            if abs(val_abs - L_abs) <= 0.5:
                 return True
         return False
 

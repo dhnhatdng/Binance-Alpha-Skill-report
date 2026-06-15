@@ -1903,6 +1903,11 @@ def build_skeleton(
             # Phase B.4 lineage flowchart (node_NNN into evidence_graph)
             "flowchart_nodes": distribution["flowchart_nodes"],
             "flowchart_edges": distribution["flowchart_edges"],
+            # v0.9.6 Fix #3 (Codex Windows EVAA 2026-06-15 feedback):
+            # step4 dumpers dropped due to chunk errors. Surface in
+            # render Data Gap so the user knows about the trace incompleteness.
+            "step4_skipped_dumpers": rule11.get("step4_skipped_dumpers", []),
+            "n_step4_skipped_dumpers": rule11.get("n_step4_skipped_dumpers", 0),
         },
 
         # Anomaly waves: pipeline-built from Rule 11 waves_proposal + Section ANOMALY 72h

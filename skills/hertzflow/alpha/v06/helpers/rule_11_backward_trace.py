@@ -1060,6 +1060,12 @@ def run_backward_trace(
     _already_m6.update(_BURN_ADDRS)
     promoted_count = 0
     promote_skipped = 0
+    # v0.9.6 Fix #3 (Codex Windows EVAA 2026-06-15 feedback): collect
+    # step4 dumpers SKIPPED due to chunk errors. Pre-v0.9.6 the SKIPPED
+    # warning was only printed to stderr; the skeleton had no record so
+    # users couldn't see how many dumpers were dropped or which ones.
+    # render_report uses this to emit a Data Gap entry.
+    step4_skipped_dumpers: list[dict[str, Any]] = []
 
     # Process queue of (dumper, depth) — starts with top_dumpers at depth 1
     process_queue: list[tuple[str, int]] = [(r["addr"], 1) for r in top_dumpers]
@@ -1159,6 +1165,13 @@ def run_backward_trace(
                     f"data would undercount total_amt and skew promotion",
                     file=sys.stderr,
                 )
+                # v0.9.6 Fix #3: structured record for Data Gap render.
+                step4_skipped_dumpers.append({
+                    "addr": dumper_addr,
+                    "depth": depth,
+                    "errored_chunks": err_n,
+                    "total_chunks": n_chunks,
+                })
                 dest_results.append((dumper_addr, depth, None))
                 continue
             merged = merge_chunked_rows(
@@ -1535,6 +1548,13 @@ def run_backward_trace(
         "recursion_truncated": recursion_truncated,
         "n_sub_dumpers_promoted": promoted_count,
         "n_sub_dumpers_skipped": promote_skipped,
+        # v0.9.6 Fix #3 (Codex Windows EVAA 2026-06-15 feedback): step4
+        # dumpers dropped due to chunk errors (any 1/N chunk errored →
+        # whole dumper skipped to avoid undercount). Render template
+        # surfaces these in Data Gap so the report reader sees what's
+        # missing rather than only finding it in stderr logs.
+        "step4_skipped_dumpers": step4_skipped_dumpers,
+        "n_step4_skipped_dumpers": len(step4_skipped_dumpers),
         "summary_locked_numbers": summary_locked_numbers,
         "summary_text": summary_text,
         # v0.8.1: expose the pre-launch trace floor so downstream

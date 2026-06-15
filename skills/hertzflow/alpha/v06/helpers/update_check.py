@@ -44,6 +44,7 @@ CHECK_TTL_SECS = 86400   # 24h
 HTTP_TIMEOUT_SECS = 3
 GITHUB_REPO = "HertzFlow/hertzflow-skills"
 GITHUB_COMMITS_URL = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
+GITHUB_TAGS_URL = f"https://api.github.com/repos/{GITHUB_REPO}/tags?per_page=1"
 
 
 def check_for_update(
@@ -73,24 +74,39 @@ def check_for_update(
                 _print_warning(cache.get("installed", ""), cache.get("latest", ""))
             return cache
 
-    # Fetch latest from GitHub (3s timeout, silent failure)
-    latest_sha = _fetch_latest_sha()
-    if not latest_sha:
+    # v0.9.6 fix #2 (Codex Windows EVAA 2026-06-15 feedback): switch from
+    # SHA-based comparison to **version-based**. SHA comparison required
+    # external `record_install(sha)` to keep `installed_commit` file
+    # in sync — but npx skills install/update doesn't always update that
+    # marker, so users on the latest `_version.py == "0.9.5"` still saw
+    # "🆕 新版本 (stale_sha → current_sha)" because installed_commit was
+    # frozen from initial install. Version is the canonical truth.
+    latest_tag, latest_sha = _fetch_latest_tag()
+    if not latest_tag:
         return None   # network failure → silently skip
+    # Normalize "v0.9.5" → "0.9.5" so we can semver-compare against
+    # _version.__version__ (which has no `v` prefix).
+    latest_version = latest_tag.lstrip("v")
+    local_version = _read_disk_version()
+    if local_version is None:
+        return None   # can't compare — skip silently
 
-    installed_sha = _read_installed(installed_file)
-
-    is_newer = bool(installed_sha and latest_sha != installed_sha)
+    is_newer = _version_tuple(latest_version) > _version_tuple(local_version)
     result = {
-        "installed": installed_sha or "",
-        "latest": latest_sha,
+        # `installed` / `latest` now hold version strings (not SHAs).
+        # Same field names preserved for cache backward-compat.
+        "installed": local_version,
+        "latest": latest_version,
         "is_newer": is_newer,
         "checked_ts": int(time.time()),
+        # Keep the SHA in cache for diagnostic / record_install hooks
+        # that still write installed_commit. Not used for comparison.
+        "latest_sha": latest_sha or "",
     }
     _save_cache(cache_path, result)
 
     if is_newer and not quiet:
-        _print_warning(installed_sha, latest_sha)
+        _print_warning(local_version, latest_version)
 
         # v0.9.5: auto-update on detection. Run `npx skills update hertzflow`
         # synchronously; on success, save new SHA to cache. Return a signal
@@ -103,22 +119,24 @@ def check_for_update(
             "BINANCE_ALPHA_NO_AUTO_UPDATE", ""
         ).strip().lower() in ("1", "true", "yes")
         if not auto_update_off:
-            ok, reason = _run_auto_update(latest_sha, installed_file, cache_path)
+            ok, reason = _run_auto_update(
+                latest_sha or "", installed_file, cache_path,
+            )
             if ok:
-                _print_auto_update_success(installed_sha, latest_sha)
+                _print_auto_update_success(local_version, latest_version)
                 result["auto_updated"] = True
-                # Refresh cache so the next probe sees current state.
+                # Refresh cache (version-based) so next probe sees current.
                 _save_cache(cache_path, {
-                    "installed": latest_sha, "latest": latest_sha,
+                    "installed": latest_version, "latest": latest_version,
                     "is_newer": False, "checked_ts": int(time.time()),
+                    "latest_sha": latest_sha or "",
                 })
                 return result
             else:
                 _print_auto_update_failed(reason)
-                # Codex audit Finding 3: failed auto-update must NOT cache
-                # is_newer=True for 24h — user might fix npm in 30s and
-                # rerun, we should retry not silently skip. Drop the cache
-                # so next probe re-attempts.
+                # Codex audit v0.9.5 R1 Finding 3: failed auto-update must
+                # NOT cache is_newer=True for 24h — user might fix npm in
+                # 30s and rerun. Drop the cache so next probe re-attempts.
                 try:
                     cache_path.unlink(missing_ok=True)
                 except (OSError, TypeError):
@@ -286,25 +304,52 @@ def record_install(commit_sha: str, *, installed_file: Path = DEFAULT_INSTALLED_
     installed_file.write_text(commit_sha.strip(), encoding="utf-8")
 
 
-def _fetch_latest_sha() -> str | None:
-    """Hit GitHub commits API. Returns short SHA or None on failure."""
+def _fetch_latest_tag() -> tuple[str | None, str | None]:
+    """v0.9.6: hit GitHub tags API instead of commits API. Returns
+    `(tag_name, short_sha)` of the most recent tag, or `(None, None)` on
+    failure. Tag name includes the `v` prefix (e.g. "v0.9.5"); caller
+    must strip if comparing to `__version__`.
+
+    Version-based comparison sidesteps the v0.9.5 false-positive nag
+    (codex Windows 2026-06-15 feedback): the SHA-based check required
+    `installed_commit` file to be kept in sync via record_install hook,
+    but `npx skills update` doesn't reliably update it. Tags are the
+    canonical release marker.
+    """
     try:
         result = subprocess.run(
             ["curl", "-sS", "--max-time", str(HTTP_TIMEOUT_SECS),
              "-H", "User-Agent: binance-alpha-skill",
-             GITHUB_COMMITS_URL],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=HTTP_TIMEOUT_SECS + 2, check=False,
+             GITHUB_TAGS_URL],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=HTTP_TIMEOUT_SECS + 2, check=False,
         )
     except (subprocess.TimeoutExpired, OSError):
-        return None
+        return None, None
     if result.returncode != 0:
-        return None
+        return None, None
     try:
         doc = json.loads(result.stdout)
     except json.JSONDecodeError:
-        return None
-    sha = (doc.get("sha") or "")[:7]
-    return sha if sha else None
+        return None, None
+    if not isinstance(doc, list) or not doc:
+        return None, None
+    first = doc[0] or {}
+    tag = first.get("name") or ""
+    sha = ((first.get("commit") or {}).get("sha") or "")[:7]
+    return (tag if tag else None), (sha if sha else None)
+
+
+def _version_tuple(s: str) -> tuple[int, ...]:
+    """Parse '0.9.5' / '0.9.5.1' / '1.0' → (0,9,5) etc. for semver
+    comparison. Returns (0,) on parse failure so unknown versions sort
+    as oldest (do not trigger spurious update nag)."""
+    try:
+        # Split on dots; ignore non-numeric suffixes ('-rc1', '+meta')
+        parts = re.split(r"[^0-9]", s)
+        return tuple(int(p) for p in parts if p)
+    except (ValueError, AttributeError, TypeError):
+        return (0,)
 
 
 def _read_installed(path: Path) -> str | None:

@@ -1605,6 +1605,25 @@ _统计 (m6 谱系全集 **{{ _m6_total_lineage }}** 个): {{ lineage.m6.n_quiet
 - {{ (n | md_cell) | regex_replace('\\d+ 个内幕钱包', (_m6_total_lineage|string) + ' 个内幕钱包') | regex_replace('\\d+ 个内幕地址', (_m6_total_lineage|string) + ' 个内幕地址') }}
 {% endfor %}
 
+{# v0.9.6 Fix #3 (Codex Windows EVAA 2026-06-15 feedback): surface
+   step4 dumpers skipped due to chunk errors. Pre-v0.9.6 these were
+   only logged to stderr; users had no in-report signal that part of
+   the trace was incomplete. The skip itself is correct (any chunk
+   error → drop dumper to avoid undercount), but silently losing data
+   without showing it in the report violates the "user knows what's
+   in vs out" principle. #}
+{# v0.9.6 Fix #3: guard with `.get(..., 0)` so old fixtures / skeletons
+   missing the field render cleanly. #}
+{%- set _n_step4_skipped = (lineage.get('n_step4_skipped_dumpers', 0) if lineage is mapping else 0) or 0 -%}
+{% if _n_step4_skipped > 0 %}
+
+**⚠️ Step4 数据缺口 (Data Gap)**: {{ _n_step4_skipped }} 个 dumper 在 surf chunk 失败后被跳过 (任意 1 个 chunk 报错 → 该 dumper 整段不计, 防止 undercount 后误升). 受影响地址 + 错 chunk 比例:
+{% for sd in lineage.get('step4_skipped_dumpers', []) %}
+- [`{{ sd.addr[:10] }}…`]({{ explorer_url(sd.addr) }}) — d{{ sd.depth }} — {{ sd.errored_chunks }}/{{ sd.total_chunks }} chunks errored
+{% endfor %}
+_Action: 重跑 (surf 一过性 throttle 通常自愈) — 或 `BINANCE_ALPHA_STEP4_WORKERS=3` 降并发后重跑._
+{% endif %}
+
 </details>
 
 {# v0.8.4.9: cross_sym 段整段删除. 用户 review (2026-06-11): 抓到的多是
