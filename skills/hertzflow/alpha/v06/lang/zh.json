@@ -1,0 +1,481 @@
+{
+  "role": {
+    "DEX_POOL": {
+      "label": "DEX 主池",
+      "short": "DEX 池"
+    },
+    "DEPLOYER": {
+      "label": "项目方钱包",
+      "short": "项目方",
+      "label_with_hint": "项目方钱包 (分发追溯起点)"
+    },
+    "PROJECT_LOCKUP": {
+      "label": "项目方/基建/分发池 (vesting / 多签 / treasury / DEX 基建 / CEX 托管 / 第三方分发平台 / 散户 claim 池, Arkham 已确认)",
+      "short": "项目方/基建/分发池",
+      "label_with_pct": "项目方/基建/分发池 (持 {balance:,.0f} tokens, Arkham 标注)",
+      "flowchart_node_label": "项目方/基建/分发池",
+      "section_l_flowchart": "项目方/基建/分发池"
+    },
+    "RULE11_QUIET": {
+      "label": "潜伏钱包 (内幕未分发)",
+      "short": "潜伏",
+      "label_with_pct": "潜伏钱包 (持 {balance:,.0f} tokens, 未分发)",
+      "flowchart_node_label": "潜伏内幕",
+      "section_l_flowchart": "潜伏钱包"
+    },
+    "RULE11_PARTIAL": {
+      "label": "分发中钱包 (内幕)",
+      "short": "分发中",
+      "label_with_pct": "分发中钱包 (已分 {dumped_pct:.0f}%)",
+      "flowchart_node_label": "分发中内幕",
+      "section_l_flowchart": "分发中钱包"
+    },
+    "RULE11_FULL": {
+      "label": "已分完钱包 (内幕)",
+      "short": "已分完",
+      "label_with_pct": "已分完钱包 (已分 {dumped_pct:.0f}%)",
+      "flowchart_node_label": "已分完内幕",
+      "section_l_flowchart": "已分完钱包"
+    },
+    "OPERATOR_RELAY": {
+      "label": "庄家中转地 (≥1% 总供应)",
+      "short": "庄家中转",
+      "flowchart_node_label": "庄家中转"
+    },
+    "DUMPER_DEST": {
+      "label": "散户接收 (分发下游)",
+      "short": "散户接收",
+      "flowchart_node_label": "散户接收"
+    },
+    "OTHER": {
+      "label": "其他 (散户+未分类)",
+      "short": "其他"
+    },
+    "ANOMALY": {
+      "label": "近 72h 异常大单参与方",
+      "short": "异常"
+    },
+    "unknown": {
+      "label": "未知角色",
+      "short": "未知"
+    }
+  },
+  "report": {
+    "title": "{symbol} ({name}) — 链上决策简报",
+    "narrative_warnings_header": "本报告存在 {n} 条文字质量提示 (validator NARRATIVE_QUALITY), 不影响数据正确性 — 重新跑一次或人工润色文字可消除",
+    "banner_data_freshness_title": "数据范围说明",
+    "banner_data_freshness_body": "底层数据可获得至 {latest_date} UTC. 此后 {lag_hours} 小时内的链上活动 (分发、对敲、新建钱包等) 不在本报告范围, 请到 BscScan 直接核对.",
+    "banner_non_bsc_primary_title": "主战场不在 BSC",
+    "banner_non_bsc_primary_body": "本 token 主战场为 **{primary_chain}** 链 (按 surf 实时 token-持币人 + DEX 标签得到的 LP USD 最大者, 或 Alpha API 报的 chainId 推得). BSC 仅为 Binance Alpha 镜像端. v0.7.20+ 工作流 已自动把所有 链上侦测 SQL (m6 / transfers / 对敲 / holdings) 路由到 {primary_chain} 主链分区, 本报告所有链上数据来自 **{primary_chain}** 主链, 报告里所有钱包链接已切到 {primary_chain} 的 block explorer.",
+    "meta_line_1": "工具版本 {version} · 主链 {chain} · Alpha 上线 {listing_date}",
+    "meta_line_2": "总供应 {total_supply:,} · 流通 {circ_supply:,} ({circ_pct:.1f}%) · 类型 {token_type}",
+    "meta_line_2_unknown": "总供应 未知 · 流通 未知 (—%) · 类型 {token_type}",
+    "meta_line_tier": "等级 {tier} · S1 {s1_date}",
+    "meta_line_tier_with_s2": "等级 {tier} · S1 {s1_date} · S2 {s2_date}",
+    "meta_line_tier_with_s2_s3": "等级 {tier} · S1 {s1_date} · S2 {s2_date} · S3 {s3_date}",
+    "token_type": {
+      "VC_LIKELY": "VC_LIKELY",
+      "MEME_LIKELY": "MEME_LIKELY",
+      "UNKNOWN": "UNKNOWN"
+    },
+    "unit": {
+      "pct": "%"
+    }
+  },
+  "verdict": {
+    "cn_label": {
+      "ENTER": "建议进入",
+      "CAUTIOUS": "谨慎进入",
+      "ADVISORY": "观察",
+      "AVOID": "慎入",
+      "EXIT_IF_HOLDING": "建议卖出",
+      "INSUFFICIENT_DATA": "数据不足",
+      "WAIT": "等等看",
+      "HOLD": "可以持"
+    },
+    "conclusion_header": "结论: {enum} ({cn_label})",
+    "one_liner_prefix": "**一句话**",
+    "baseline_line": "_基线 {baseline_cn} · 已降级 {downgrade} 档至 {next_tier_cn} ({next_tier_enum})_",
+    "baseline_line_no_downgrade": "_基线 {baseline_cn} · 无降级_"
+  },
+  "section": {
+    "anomaly": {
+      "title": "📊 完整异动事件列表 (数据明细, 按分发轮次, UTC 时间)",
+      "detector_summary_h3": "检测器汇总",
+      "rhythm_h3": "节奏识别",
+      "verdict_impact_label": "对 判定 的影响",
+      "table_header_evt": "事件编号",
+      "table_header_utc": "UTC",
+      "table_header_ago": "距今",
+      "table_header_from_to": "来源 → 目标",
+      "table_header_nature": "性质",
+      "table_header_amount": "金额",
+      "detector_table_header_emoji": "emoji",
+      "detector_table_header_label": "类别",
+      "detector_table_header_count": "数量",
+      "detector_table_header_detail": "解读"
+    },
+    "multi_chain": {
+      "title": "主战场链",
+      "interpretation_label": "解读",
+      "table_header_item": "项目",
+      "table_header_value": "取值",
+      "label_main_chain": "**主战场链**",
+      "label_supply_chain": "铸造链",
+      "label_trading_chain": "交易链",
+      "label_cross_chain": "跨链分布",
+      "label_coverage": "报告覆盖范围",
+      "value_full_coverage": "**完整覆盖**",
+      "value_single_chain": "**单链, 无跨链桥发现** (v0.6 phase B.3 minimal — 仅 BSC 检测)",
+      "gate_note_ok": "✅ 无非 BSC 链数据需求.",
+      "value_main_chain": "**{chain}** ({chain_name})",
+      "value_supply_chain_with_total": "{chain}, totalSupply {total:,}",
+      "value_supply_chain": "{chain}",
+      "value_trading_chain": "{chain} (Alpha + DEX 主池)",
+      "value_cross_chain_single": "**单链, 无跨链桥发现** (v0.6 phase B.3 minimal — 仅 BSC 检测)",
+      "value_coverage_partial": "**完整覆盖 (主链 {primary})** — v0.7.20 起 工作流 已按 Alpha API 报的 chainId 路由到主链, 所有 链上侦测 SQL 直接查主链分区",
+      "gate_note_non_bsc": "✅ 主链 {primary}, 工作流 已路由到主链分区, 无 判定 降级",
+      "chain_name_BSC": "BNB Chain",
+      "value_main_chain_mirror": "**{primary}** (主战场, 非 BSC; BSC 为镜像 / 交易端)",
+      "value_cross_chain_mirror": "**跨链镜像** — 主战场在 {primary}, BSC 仅为镜像端; 本报告所有 链上侦测 数据 (m6 / transfers / 对敲 / holdings) 均来自 **{primary}** 主链, BSC 镜像侧不纳入",
+      "value_main_chain_holder_snapshot": "**{primary}** (单链, 无 BSC 镜像; Binance Alpha 以 SPL token 直接挂)",
+      "value_cross_chain_holder_snapshot": "**单链 {primary}** — Alpha 直接挂 SPL token, 没有 BSC / EVM 镜像桥; 本报告仅 持币人 snapshot + Alpha 实时, **不**包含 链上侦测 SQL 段",
+      "value_coverage_holder_snapshot": "**HOLDER_SNAPSHOT (主链 {primary})** — surf 不覆盖 {primary} 的 `onchain-sql` (无 `agent.{primary}_transfers` 表), 全部 链上侦测 SQL 段已跳过; 保留 Alpha 实时行情 + surf token-持币人 REST + monitoring 导出",
+      "gate_note_holder_snapshot": "⚠️ 主链 {primary} 走 HOLDER_SNAPSHOT 模式 — surf onchain-sql 不覆盖该链, 链上侦测 SQL 段全部跳过. 实时行情 / 持币人 / mcap / FDV 等 REST 数据正常拉取. 内幕谱系 / 对敲 / 流水大户 / 跨币 4 类 SQL 检测**无数据**, 顶部 提示条 已说明; 用 Solscan / Helius / Shyft / Vybe 手工核对"
+    },
+    "tge": {
+      "title": "入场价 锚点",
+      "table_header_anchor": "时间锚点",
+      "table_header_utc": "UTC",
+      "table_header_price": "价格",
+      "table_header_vs_current": "相对当前",
+      "label_lp_first": "LP 创建首笔 (DEX 启动)",
+      "label_alpha_first": "Alpha 上线首笔",
+      "label_current_price": "**当前价**"
+    },
+    "alloc": {
+      "title": "项目方话语权",
+      "table_header_item": "项目",
+      "table_header_value": "取值",
+      "table_header_source": "来源",
+      "label_alpha_quota": "Alpha 配额比例 (官方披露)",
+      "value_not_disclosed": "**未披露**",
+      "source_alpha_no_field": "Binance Alpha 官方接口当前未给出该字段",
+      "label_deployer_balance": "项目方钱包 `{addr}` 当前余额",
+      "value_deployer_empty": "几乎空仓 (全部分发完)",
+      "source_deployer_trace": "项目方分发追溯",
+      "label_insider_total": "上线前内幕接收方 {n} 个累计余额",
+      "value_insider_total": "{tokens:,.0f} tokens (= {pct}% 总供应)",
+      "source_insider_total": "内幕钱包累计",
+      "label_quiet_total": "潜伏钱包 {n} 个持仓 (核心未来风险)",
+      "value_quiet_total": "**{tokens:,.0f} tokens (= {pct}% 总供应 / ${usd})**",
+      "source_quiet_total": "未分发内幕钱包",
+      "label_full_dumper": "已分完内幕钱包 {n} 个 (分发完成)",
+      "value_full_dumper": "已 100% 分完, 剩余 0",
+      "source_full_dumper": "已转出 ≥95% 的内幕钱包",
+      "label_burn": "**已销毁 (永久退出流通)**",
+      "value_burn": "**{tokens:,.0f} tokens (= {pct}% 总供应 / ${usd})**",
+      "source_burn": "0x...dead / 0x...0 销毁地址持仓 (deploy 时直接销毁的额度, 永不流通)"
+    },
+    "cex_trace": {
+      "title": "短期上 CEX 催化剂",
+      "table_header_exchange": "交易所",
+      "table_header_status": "状态",
+      "table_header_ts": "时间",
+      "table_header_since": "距今",
+      "status_listed": "已上线",
+      "status_not_listed": "未上线",
+      "status_unverified": "未核实",
+      "new_catalyst_none_14d": "无 14 天内新催化剂",
+      "tier_explanation": "当前 {tier} ({tier_desc})",
+      "tier_desc_S1": "Alpha only",
+      "tier_desc_S2": "Alpha + Binance 永续",
+      "tier_desc_S3": "Alpha + Binance Spot",
+      "ago_days": "{days} 天前",
+      "ago_months": "{months} 个月前",
+      "since_prefix": "~{text}",
+      "new_catalyst_within_14d": "近 14 天 Binance 永续刚上线"
+    },
+    "liq": {
+      "title": "进场上限",
+      "table_header_anchor": "锚点",
+      "table_header_value": "取值",
+      "table_header_note": "备注",
+      "label_5pct_depth": "**不超 5% 滑点的最大单笔买入 (估算)**",
+      "note_5pct_depth": "由 Alpha 24h vol 推导 (vol_24h / 96 × 0.05 启发式估算)",
+      "label_dex_lp": "DEX 主池流动性",
+      "label_dex_vol": "DEX 主池 24h 交易量",
+      "label_lp_flow": "LP 24h 净流",
+      "value_lp_flow": "+{net_pct:.2f}% (in {in_tokens:,.0f} / out {out_tokens:,.0f})",
+      "label_dex_addr": "DEX 主池地址",
+      "note_dex_addr": "FDV ${fdv:,}",
+      "note_no_pool": "无主池",
+      "decision_anchor_alpha_5pct": "Alpha 5% 撤单上限",
+      "decision_anchor_dex_lp_usd": "DEX 主池 USD 流动性",
+      "status_depth_good": "🟢 深度尚可",
+      "status_depth_medium": "🟡 中等",
+      "status_depth_thin": "🔴 超薄",
+      "value_lp_flow_full": "{net_pct:+.2f}% (in {lp_in:,.0f} / out {lp_out:,.0f})"
+    },
+    "holdings": {
+      "title": "各角色持仓分布",
+      "bar_h3": "**整体分发可视化** (左 = 相对本组最大值, 右 = 占总供应 0-100%)",
+      "table_h3": "**持仓分布表**",
+      "key_takeaways_h3": "**关键解读**",
+      "table_header_role": "角色",
+      "table_header_n_wallets": "钱包数",
+      "table_header_balance": "当前持仓",
+      "table_header_pct": "占总供应 %",
+      "bar_label_rel": "rel",
+      "bar_label_abs": "abs",
+      "table_header_top_wallet": "Top 钱包"
+    },
+    "lineage": {
+      "title": "上溯发现 (项目方钱包 → 内幕谱系)",
+      "flowchart_h3": "**资金流图**",
+      "table_h3": "**内幕钱包列表 (项目方分发追溯)**",
+      "m4_notes_h3": "**m4_notes (LP 前预分配解读)**",
+      "table_header_id": "编号",
+      "table_header_addr": "地址",
+      "table_header_recv": "收自项目方",
+      "table_header_balance": "当前持仓",
+      "table_header_dumped": "已分 %",
+      "stat_summary": "_统计: {n_quiet} 个潜伏 (未分发) · {n_partial} 个分发中 · {n_full} 个已分完_"
+    },
+    "monitoring": {
+      "title": "监控钱包 + 实时告警",
+      "table_header_n": "#",
+      "table_header_role": "角色",
+      "table_header_alert": "告警条件",
+      "table_header_status": "状态",
+      "table_header_wallet": "钱包"
+    },
+    "decision": {
+      "anchors_h3": "决策锚点汇总",
+      "anchors_table_header_anchor": "决策锚点",
+      "anchors_table_header_value": "数值",
+      "anchors_table_header_status": "状态",
+      "action_h3": "行动方案",
+      "immediate_action_label": "**立即动作**",
+      "immediate_action_summary": "{action_text} on {venue} · 分 {n_tranches} 笔 · 单笔上限 ${tranche_cap:,} · 完成期 {hours} 小时 · 滑点 ≤ {slip}%",
+      "action_enum": {
+        "buy": "buy",
+        "sell": "sell",
+        "wait": "wait",
+        "monitor": "monitor"
+      },
+      "stop_loss_label": "**止损**",
+      "stop_loss_summary": "触发 ${trigger:.6f} · 当前 ${current:.6f} · 距 {delta_pct}%",
+      "re_entry_label": "**重新进场条件**"
+    },
+    "machine_readable": {
+      "title": "机器可读 JSON (精简)"
+    },
+    "footer": {
+      "disclaimer": "**仅数据研究, 非投资建议. evidence_graph 包含 {n} 个稳定 ID 用于 provenance 追溯.**"
+    },
+    "cross_sym": {
+      "title": "跨币大户检测",
+      "whale_h3": "🐋 候选 #{n}: `{address}`",
+      "table_header_field": "字段",
+      "table_header_value": "取值",
+      "field_identity": "身份判定",
+      "field_this_pct": "本币持仓",
+      "field_cross_sym_count": "跨币命中数",
+      "field_top_cross": "最大跨币持仓",
+      "field_pre_launch": "上线前内幕命中数",
+      "field_arkham": "Arkham label",
+      "field_cross_sym_list": "跨币持仓明细",
+      "table_header_sym": "币种",
+      "table_header_pct": "持仓 %",
+      "table_header_rank": "排名",
+      "tokens_label": "个币",
+      "no_label": "(无)",
+      "identity_narrative_h4": "身份判定理由",
+      "risk_narrative_h4": "对交易者的风险解读",
+      "bscscan_label": "{explorer} 链上查看",
+      "identity_enum": {
+        "KOL_MANAGER": "KOL 操盘代理 (跨多项目预挖矿持仓)",
+        "ACTIVE_MM": "主动做市商",
+        "ARB_DESK": "跨所套利桌",
+        "OTC_DESK": "OTC 大宗交易桌",
+        "UNKNOWN_WHALE_HIGH_CROSS_SYM": "跨币大户 (身份待定)",
+        "INSUFFICIENT_SIGNAL": "数据不足以分类"
+      },
+      "role_h4": "角色归类 (6 步链上推断)",
+      "role_evidence_step": "步骤",
+      "role_evidence_finding": "发现",
+      "role_enum": {
+        "insider_allocation_holder": "内部分配持有人 (TGE 同期收到大笔, 来自项目方资金链)",
+        "active_multi_token_allocator": "跨项目分配者 (多个 Alpha 币的上线前/上线时获配)",
+        "dex_mm_bot": "DEX 做市机器人 (与 LP 双向交易)",
+        "dex_mm_bot_unwinding": "DEX 做市机器人 — 收尾减仓阶段",
+        "retail_holder": "散户持有人 (DEX 买入, 长期持有)",
+        "wash_infra_member": "对敲 基建成员 (P / Q / X 三件套之一, 详见 对敲 Infrastructure 章节)",
+        "unknown": "未知 — 信号不足",
+        "unknown_contract_small": "未知小合约 (代码 < 5KB, 行为不明确)"
+      }
+    },
+    "wash_infra": {
+      "title": "🌀 对敲基建检测",
+      "setup_h3": "🌀 配置 #{n}",
+      "table_header_field": "字段",
+      "table_header_value": "取值",
+      "field_classification": "分类",
+      "field_executor": "Executor X (执行者)",
+      "field_maker_buy": "Maker P (买方做市)",
+      "field_maker_sell": "Maker Q (卖方做市)",
+      "field_atomic_ratio": "原子配对 tx 占比 (X 在同一笔 tx 里既收又付的占比, 1.0 = DEX 路由 atomic swap 签名)",
+      "field_p_drift": "P 净流偏移 (P 累计 in - out 的差距 %, ≈ 0 = 没囤币, 是 对敲 左口袋)",
+      "field_q_drift": "Q 净流偏移 (Q 同上, 对敲 右口袋)",
+      "field_diversity": "tx_from 多样性 (= 不同发起人数 / 总笔数, <0.05 = 单一操盘者)",
+      "field_wash_volume_tokens": "**本 对敲 累计 token 流量 (单边, since listing)**",
+      "field_wash_volume_usd": "**折算 USD**",
+      "field_wash_pct_supply": "**占总供应 %**",
+      "class_enum": {
+        "wash_infrastructure_routed": "路由对敲 — 服务多用户的中转 对敲 路由 (tx_from 多样性 > 0.3)",
+        "wash_infrastructure_operator_controlled": "庄家-Controlled 对敲 — 单一操盘者控制的闭环 (tx_from 多样性 < 0.05)",
+        "wash_infrastructure_ambiguous": "Ambiguous 对敲 — 多样性中间区间, 性质待定"
+      },
+      "class_oneliner": {
+        "wash_infrastructure_routed": "🎯 **行为画像**: 商用 对敲 路由 — 服务多个上游用户的中转设施 (tx_from 多样性 > 0.3, 是多人共享的洗量基础设施, 不是单一项目方控制).",
+        "wash_infrastructure_operator_controlled": "🎯 **行为画像**: 单一操盘者控制的闭环 对敲 — executor X 在 P / Q 两个口袋之间反复对倒, 制造虚假成交量, 链上实际没人在买 token. 跟正常 MM (P/Q 偏移 非零) 完全不同.",
+        "wash_infrastructure_ambiguous": "🎯 **行为画像**: 中间区间, 性质待定 — diversity 介于 0.05-0.3, 庄家-controlled vs routed 不能明确归类, 需结合上下游签名地址再分析."
+      },
+      "investigation_h4": "调查叙述",
+      "how_to_read_block": "> 怎么看这张表 (三个核心指标全部低 = 对敲 铁证):\n>\n> - **原子配对 tx 占比** = 在同一 tx_hash 里, 执行者 (X) **同时** 既收又付 token 的 tx 比例. 正常人买就是收 / 卖就是付 < 30%; **接近 1.0 = 这钱包从来不在做单向买卖, 100% 在做 atomic swap** (DEX 路由 合约里一笔交易左买右卖). 是洗量基础设施的链上签名.\n> - **P 净流偏移** = P (买方做市) 累计收到 token / 累计付出 token 的差距%. P 是 对敲 的左口袋. **接近 0 = P 一个币都没囤** (进 100, 出 100, 偏移 = 0). 真持仓者要么积仓 (偏移 > 0) 要么减仓 (偏移 < 0), 不可能 0.\n> - **Q 净流偏移** = Q (卖方做市) 同口径, 对敲 的右口袋. 同样接近 0 = Q 也没囤.\n>\n> 三个同时低意味着: X 在 P 和 Q 两个口袋之间反复对倒, 制造表面成交量, 实际链上没人真的在买 PLAY. 这跟正常 MM (做市商两边吃 spread, P/Q 偏移 永远非零) 不同.\n>\n> tx_from 多样性 < 0.05 表示这套 对敲 几乎只服务一个上游 (= 单一操盘者控制); > 0.3 表示多用户共享中转 (= 商用 对敲 路由)."
+    },
+    "flow_operators": {
+      "title": "🤖 跨币 / 单一操盘流水大户",
+      "how_to_read_block": "> 怎么看这张表 (3 个核心指标):\n>\n> - **tx_from 多样性 < 0.05** = 该钱包所有交易里只有 ≤ 2 个不同的上游签名地址 → 单一操盘者控制\n> - **跨 Alpha 币数 ≥ 5** = 同一钱包在 ≥5 个 Alpha 币上 60 天高频 tx → 跨币策略 机器人\n> - **Top-2 对手占比 ≥ 0.80** = 该钱包跟两个特定地址做了 80%+ 的本币 tx → 异步对倒 / 套利 工作流\n>\n> 这些钱包**净持仓极低但流水巨大**, 主要贡献伪表面 vol. 真实接盘比 vol 数字小. 监控它们的进出动作可能领先于其他 Alpha 币的同步行为. 子分类: DEX_ARB_BOT (对手是 DEX 路由/聚合器), ASYNC_WASH (对手是普通 EOA), CROSS_ALPHA_OPERATOR (跨多币活跃).",
+      "summary_table_h3": "概览表 (top 10, 按本币 tx 数降序)",
+      "operator_h3": "🤖 候选 #{n}: `{addr}…`",
+      "field_label": "字段",
+      "field_value": "取值",
+      "col_subclass": "子分类",
+      "col_n_alpha": "近 60 天活跃 Alpha 币数",
+      "col_n_60d": "近 60 天总成交笔数 (跨所有币, 单位: 笔)",
+      "col_n_this": "在本币上的成交笔数 (单位: 笔)",
+      "col_diversity": "上游签名地址集中度 (= 不同发起人数 / 总笔数, 越低越像单一操盘)",
+      "col_top2_ratio": "前 2 大对手占本币成交笔数 %",
+      "col_net_pct": "净持仓占总供应 %",
+      "col_top2": "前 2 大交易对手",
+      "identity_h4": "身份判定理由",
+      "risk_h4": "对交易者的风险解读",
+      "cross_alpha_h4": "跨币活动明细 ({n} 个币, 按近 60d 成交笔数降序; 括号内 = 笔数·链)",
+      "subclass_oneliner": {
+        "DEX_ARB_BOT": "🎯 **行为画像**: 跨 DEX / 跨场套利 机器人 — 同一笔交易里从一个池子收币, 在另一条路径上卖出, 吃路径差价 / spread. 不囤币.",
+        "ASYNC_WASH": "🎯 **行为画像**: 异步对倒 对敲 (P → X → Q) — 操盘者用三个钱包跨 tx 倒手, 把币在自己口袋间循环, 制造表面成交量. 不囤币.",
+        "CROSS_ALPHA_OPERATOR": "🎯 **行为画像**: 跨币策略 庄家 — 同一签名地址在多个 Alpha 币上同时跑同一策略, 各币行为高度相关. 监控它的进出 ≈ 监控多个 Alpha 币的同步信号.",
+        "UNCLASSIFIED_SINGLE_OPERATOR": "🎯 **行为画像**: 单一操盘 (子类型待定) — 链上指纹是单一签名地址驱动, 但对手结构 / 跨币数量都没达到具体子类阈值. 信号弱但值得监控."
+      },
+      "tail_note": "以上展示 top {shown} (按本币 tx 数降序); 余下 {total} 个流水大户全部已加入 monitoring/monitoring_paste.json — 一键粘贴进 Binance Wallet / OKX 即可跟踪.",
+      "subclass": {
+        "DEX_ARB_BOT": "DEX 套利 机器人",
+        "ASYNC_WASH": "异步对倒 对敲 (P→X→Q 跨 tx)",
+        "CROSS_ALPHA_OPERATOR": "跨币策略 庄家",
+        "UNCLASSIFIED_SINGLE_OPERATOR": "单一操盘 (待分类)"
+      },
+      "col_wallet": "钱包"
+    },
+    "update_check": {
+      "title": "🆕 发现新版本 ({old} → {new})",
+      "action": "运行 `npx skills update hertzflow` 升级"
+    },
+    "funding_attribution": {
+      "title": "💰 高价值地址资金来源 (mint / DEX / P2P)",
+      "how_to_read": "下面是 对敲配置 / 流水大户 / m6 内幕 / Top-30 持币人 段里已经标记过的高价值地址, 按 365 天内**收到的 token 来源**分类: mint (从 0x0 直接铸造, 矿币 / 跨链桥 / 空投 mint 合约都算) / DEX 买入 (从已知 DEX 主池买入) / P2P (其他 EOA 转账, 包含未识别的 CEX 提现). 用来判断: ⛏️ Mint 占比高 = 矿币 / 跨链桥 token 操作员或挖空投的 马甲钱包; 🟢 DEX 占比高 = 真买盘 散户 持仓; 🔵 P2P 占比高 = 操作员归集 / OTC 接收.",
+      "summary_line": "已查 {n_queried} 个高价值地址, 其中 {n_data} 个 365 天内有真实收币记录 — ⛏️ Mint 主导 {n_mining} 个 / 🟢 DEX 主导 {n_dex} 个 / 🔵 P2P 主导 {n_p2p} 个.",
+      "col_addr": "地址",
+      "col_role": "首要来源",
+      "col_total": "总收币",
+      "col_mint_pct": "mint %",
+      "col_dex_pct": "DEX 买入 %",
+      "col_p2p_pct": "P2P %",
+      "col_primary": "标签",
+      "primary_label": {
+        "mint": "⛏️ Mint 主导",
+        "dex_buy": "🟢 DEX 买入主导",
+        "cex_withdraw": "🟡 CEX 提现主导",
+        "p2p": "🔵 P2P 转账主导",
+        "unknown": "—"
+      }
+    }
+  },
+  "anomaly": {
+    "wave_title": {
+      "pre_launch_otc": "第一波 上线前 OTC 预分发",
+      "dumper_to_downstream": "第二波 分发主体向下游分发",
+      "recent_72h": "第三波 近 72h 异常活动"
+    },
+    "wave_status": {
+      "completed": "已完成",
+      "in_progress": "进行中",
+      "active": "活跃"
+    },
+    "wave_format": "{title} ({ts_range}, **{status}**)",
+    "detector_label": {
+      "pre_launch_distribution": "上线前内幕分发",
+      "full_dumper_wallets": "已分完内幕钱包",
+      "quiet_wallets": "潜伏钱包 (未分发)",
+      "anomaly_72h": "近 72h 异常大单",
+      "anomaly_72h_truncated": "近 72h 异常大单 (truncated ≥{limit})"
+    }
+  },
+  "rule_11": {
+    "summary_minted_distributed": "项目方分发追溯: 项目方钱包 {deployer_short}... 于 {mint_ts} 铸造 {mint_amount:,} tokens, 上线前向 {n_receivers} 个内幕地址分发 {distributed_amount:,}. 潜伏钱包 (未分发) {n_quiet} 个, 合计持仓 {quiet_balance:,} tokens.",
+    "summary_no_pre_launch": "项目方分发追溯: 项目方钱包 {deployer_short}... 于 {mint_ts} 铸造 {mint_amount:,} tokens, 上线前无内幕分发.",
+    "m6_no_rows": "项目方未在上线前 90 天内向其他地址分发. 链上仅见 mint + LP 创建.",
+    "from_to_deployer_prefix": "项目方"
+  },
+  "monitoring": {
+    "footer_paste_instruction": "复制 monitoring_paste.json 全部内容到 Binance Wallet 或 OKX Wallet 的 批量导入 框. 系统自动还原 钱包 name + emoji 标签 (🔴 critical / 🟡 watch / 🟠 部分分完). 之后这些地址有大额转出, 推送告警立即手动检查.",
+    "role_deployer_full": "项目方部署钱包",
+    "role_quiet_full_with_balance": "潜伏钱包 (持 {balance:,.0f} tokens, 未分发)",
+    "role_full_dumper_with_pct": "已分完钱包 (已分 {dp:.0f}%)",
+    "role_partial_with_pct": "分发中钱包 (已分 {dp:.0f}%)",
+    "role_anomaly_72h": "近 72h 异常大单参与方",
+    "role_operator_relay_with_pct": "庄家中转地 (持 {pct:.2f}% 总供应)",
+    "role_cross_sym_whale": "跨币大户 (持 {pct:.2f}% + 同时持有 {n_cross} 个其他 Alpha 币, 分类 {cls})",
+    "role_flow_operator": "流水大户 {sub} (本币 {n_tx:,} tx · 跨 {n_alpha} Alpha 币)"
+  },
+  "common": {
+    "unknown": "未知",
+    "none_dash": "—",
+    "yes": "是",
+    "no": "否",
+    "na": "—",
+    "zero_balance": "0 tokens",
+    "tokens_suffix": "tokens",
+    "status_red": "🔴",
+    "status_orange": "🟠",
+    "status_yellow": "🟡",
+    "status_green": "🟢",
+    "status_red_word": "🔴 高",
+    "status_orange_word": "🟡 中等",
+    "status_green_word": "🟢"
+  },
+  "llm": {
+    "lang_directive": "Generate ALL narrative content in 中文 (Simplified Chinese). Do not mix languages."
+  },
+  "smoke_stub": {
+    "verdict_one_liner": "本币基本面显示项目方分发追溯命中潜伏钱包持有 13 亿 token (=总供应 26%), 配合分发中钱包累计 14 亿 token 已进入分批派发 (开始卖出) 阶段, 近 24-72h 有 15+ 笔异常大额转账, 建议持仓者择机退出 alpha 头寸, 等潜伏地址全部转出后再评估再入场.",
+    "anomaly_verdict_impact": "项目方分发追溯 + 近 72h 异常双重信号叠加触发 EXIT_IF_HOLDING. 4 个潜伏钱包累计持仓 占总供应 26% 是未来抛压主要来源, 近期 100+ 笔大额转账显示分发节奏明显加快, 判定 baseline 从 AVOID 降级 1 档至 EXIT_IF_HOLDING.",
+    "monitoring_footer": "以上钱包均加入实时监控. 任何 1000+ token 转出, 或大额转入 CEX hot 钱包, 或 1 小时内 5+ 笔转账, 通过你配置的外部告警通道发出提醒 (如果有配).",
+    "generic": "已根据项目方分发追溯与近 72h 异常检测数据综合判定.",
+    "interpretation": "本节数据已落地, 关键读数与结论推理一致. 详见证据图中对应事件编号 / 内幕编号 / 节点编号.",
+    "hours_ago": "约 X 小时前",
+    "nature": "项目方向内幕钱包的上线前分发, 事件已记录.",
+    "wave_status": "已完成",
+    "detector_detail_rhythm": "本波分发节奏与历史样本一致, 详见证据图.",
+    "detector_detail": "本类检测器命中, 已累计计数, 详见上方 异常.waves 列表.",
+    "rhythm_title": "上线前分发 → 上市后部分抛售 → 近期再度活跃",
+    "key_takeaway": "潜伏钱包持仓占总供应 0.5%, 是未来抛压主要来源.",
+    "m4_note": "LP 创建前项目方已向 8 个内幕地址分发, 5 个已 100% 抛完, 余下 3 个待观察.",
+    "identity_narrative": "项目方分发的内幕受益方",
+    "alert": "1000+ token 转出或转入 CEX 即触发告警.",
+    "immediate_action": "立即在 alpha 分 3 笔抛售当前持仓, 滑点上限 3%, 48 小时内完成.",
+    "rationale": "触发价对应潜伏钱包开始派发的早期临界点, 防止连锁砸盘.",
+    "re_entry": "条件满足时, 表明派发风险已解除, 可重新评估."
+  }
+}
