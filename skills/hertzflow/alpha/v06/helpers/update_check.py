@@ -1,17 +1,27 @@
 #!/usr/bin/env python3
 """update_check.py — Self-check for newer skill versions on GitHub.
 
-v0.6.5. On pipeline startup, optionally checks GitHub for newer commits
-on main. If installed commit SHA differs from latest, prints a single
-i18n-localized line to stderr suggesting `npx skills update`.
+v0.9.5 — auto-update on detection. Newer commit detected → run
+`npx skills update hertzflow` synchronously, then exit with "please
+retry" so the user's command resumes on the up-to-date version. The
+original notify-only behavior remains the fallback when the npx
+subprocess fails (and via BINANCE_ALPHA_NO_AUTO_UPDATE opt-out).
+
+v0.6.5 (original). On pipeline startup, optionally checks GitHub for
+newer commits on main. If installed commit SHA differs from latest,
+prints a single i18n-localized line to stderr suggesting `npx skills
+update`.
 
 Design constraints:
-  - **Non-blocking**: 3-second curl timeout, silent failure
+  - **Non-blocking probe**: 3-second curl timeout, silent failure
   - **24h cache**: writes ~/.binance-alpha-data/last_update_check to
     avoid hitting GitHub more than once per day
   - **No GitHub token required** (public API)
-  - **i18n-localized**: respects current lang via i18n.t()
-  - **Off-switch**: BINANCE_ALPHA_NO_UPDATE_CHECK=1 disables entirely
+  - **i18n-localized notice**: respects current lang via i18n.t()
+  - **Off-switches**:
+      - BINANCE_ALPHA_NO_UPDATE_CHECK=1 — skip the GitHub probe entirely
+      - BINANCE_ALPHA_NO_AUTO_UPDATE=1 — probe + notify only (no
+        auto-run of `npx skills update`)
   - **Privacy**: only 1 HTTP GET to GitHub commits API, no user data
 """
 
@@ -19,6 +29,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import time
@@ -80,7 +92,187 @@ def check_for_update(
     if is_newer and not quiet:
         _print_warning(installed_sha, latest_sha)
 
+        # v0.9.5: auto-update on detection. Run `npx skills update hertzflow`
+        # synchronously; on success, save new SHA to cache. Return a signal
+        # field `auto_updated=True` so the CLI entry-point can `sys.exit(0)`
+        # without killing imported library callers (e.g. Discord bot batches
+        # that call build_skeleton in-process — codex audit Finding 1).
+        # Opt-out via env so anyone debugging against a specific old version
+        # can keep running.
+        auto_update_off = os.environ.get(
+            "BINANCE_ALPHA_NO_AUTO_UPDATE", ""
+        ).strip().lower() in ("1", "true", "yes")
+        if not auto_update_off:
+            ok, reason = _run_auto_update(latest_sha, installed_file, cache_path)
+            if ok:
+                _print_auto_update_success(installed_sha, latest_sha)
+                result["auto_updated"] = True
+                # Refresh cache so the next probe sees current state.
+                _save_cache(cache_path, {
+                    "installed": latest_sha, "latest": latest_sha,
+                    "is_newer": False, "checked_ts": int(time.time()),
+                })
+                return result
+            else:
+                _print_auto_update_failed(reason)
+                # Codex audit Finding 3: failed auto-update must NOT cache
+                # is_newer=True for 24h — user might fix npm in 30s and
+                # rerun, we should retry not silently skip. Drop the cache
+                # so next probe re-attempts.
+                try:
+                    cache_path.unlink(missing_ok=True)
+                except (OSError, TypeError):
+                    pass
+
     return result
+
+
+def _run_auto_update(
+    latest_sha: str,
+    installed_file: Path,
+    cache_path: Path,
+) -> tuple[bool, str]:
+    """v0.9.5: run `skills update hertzflow` synchronously.
+
+    Codex round-2 Finding 5: `npx --no-install` is NOT a reliable
+    no-bootstrap guarantee on npm 10.x (codex tested empirically — npx
+    still hits the registry). Trust boundary moved: resolve `skills`
+    binary via `shutil.which()` first (typical case for users who ran
+    `npm install -g skills`). Fall back to `npx --yes` only when no
+    local CLI is found, then rely on the F2 verification step to detect
+    any wrong-directory update.
+
+    Codex round-1 Finding 2 + round-2 Finding 2: capture `_version.py`
+    BEFORE the subprocess call (not after). Direct CLI invocations of
+    update_check don't import `_version` at module-load time, so the
+    "in-memory version" comparison breaks. Storing the pre-update
+    version locally sidesteps the import-order issue entirely.
+
+    Returns (ok, reason). `reason` describes the failure mode for the
+    failed-update message (timeout / npx_missing / no_skills_cli /
+    no_change_on_disk / exit_N).
+    """
+    # F2: snapshot version BEFORE invoking any subprocess.
+    pre_update_version = _read_disk_version()
+
+    # F5: prefer locally resolved binary over npx — avoids the
+    # `npx --no-install` cross-version-flag-semantics issue entirely.
+    skills_cli = shutil.which("skills")
+    if skills_cli:
+        cmd = [skills_cli, "update", "hertzflow"]
+    else:
+        # Fallback: `npx --yes` will auto-install upstream `skills` CLI
+        # if missing. Safe because F2 verification catches any update
+        # that touched the wrong directory.
+        cmd = ["npx", "--yes", "skills", "update", "hertzflow"]
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+            timeout=180,   # npm/GitHub fetch = up to 3 min
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "timeout_180s"
+    except (OSError, FileNotFoundError):
+        # `npx` (or `skills`) itself missing (no Node.js installed)
+        return False, "npx_missing"
+
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "")[-500:].strip()
+        cli_missing_markers = ("could not determine executable",
+                               "command not found",
+                               "404 Not Found",
+                               "Could not find",
+                               "not found in registry")
+        is_cli_missing = any(m.lower() in tail.lower() for m in cli_missing_markers)
+        if tail:
+            print(f"[auto-update] skills update failed (exit {proc.returncode}):\n{tail}",
+                  file=sys.stderr)
+        return False, "no_skills_cli" if is_cli_missing else f"exit_{proc.returncode}"
+
+    # F2: verify the running checkout actually got updated.
+    if not _verify_update_applied(pre_update_version):
+        return False, "no_change_on_disk"
+
+    # Persist new SHA so we don't loop. _save_cache + record_install
+    # already swallow OSError silently.
+    try:
+        record_install(latest_sha, installed_file=installed_file)
+    except Exception:
+        pass
+    return True, "ok"
+
+
+def _read_disk_version() -> str | None:
+    """Read `__version__` directly from `_version.py` on disk. Bypasses
+    Python module cache so we see post-`skills update` state. Returns
+    None on any IO / parse error."""
+    try:
+        version_path = Path(__file__).parent / "_version.py"
+        content = version_path.read_text(encoding="utf-8")
+        m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+def _verify_update_applied(pre_update_version: str | None) -> bool:
+    """v0.9.5 codex round-2 Finding 2: confirm `skills update` touched
+    THIS checkout. Compares post-update on-disk version against the
+    pre-update version captured before the subprocess ran.
+
+    If they differ, the file was updated (success). If they match, the
+    update touched a different install root (manual git clone, custom
+    install path, npx auto-bootstrap that picked wrong directory) and
+    we MUST NOT mark installed_commit, lest we silently suppress
+    re-update of a still-stale install.
+
+    pre_update_version=None means we couldn't read the file before —
+    treat as failure (cannot prove anything changed).
+    """
+    if pre_update_version is None:
+        return False
+    post = _read_disk_version()
+    return post is not None and post != pre_update_version
+
+
+def _print_auto_update_success(old: str, new: str) -> None:
+    print(
+        f"\n✅ 已自动升级 ({old or '?'} → {new}). 请重新运行刚才的命令.",
+        file=sys.stderr,
+    )
+    print(
+        "    Auto-update applied. Please re-run your last command.\n",
+        file=sys.stderr,
+    )
+
+
+def _print_auto_update_failed(reason: str = "") -> None:
+    # Reason-specific human message so the user knows whether to install
+    # npm, install skills CLI, fix network, etc.
+    reason_zh = {
+        "timeout_180s": "(超时 180s — 网络/代理慢, 重试通常可恢复)",
+        "npx_missing": "(本地没装 Node.js — 先装 https://nodejs.org/)",
+        "no_skills_cli": "(本地没装 `skills` CLI — 先跑 `npm install -g @vercel/skills`)",
+        "no_change_on_disk": "(npx 退出 0 但当前 checkout 未变 — 可能是手动 clone 的 repo, 请用 git pull 升级)",
+    }.get(reason, "")
+    reason_en = {
+        "timeout_180s": "(timed out at 180s — likely slow network/proxy, retry usually works)",
+        "npx_missing": "(no Node.js installed locally — install from https://nodejs.org/)",
+        "no_skills_cli": "(no `skills` CLI installed — run `npm install -g @vercel/skills`)",
+        "no_change_on_disk": "(npx exited 0 but this checkout didn't change — likely manual git clone, run `git pull`)",
+    }.get(reason, "")
+    print(
+        f"\n⚠️ 自动升级失败 {reason_zh}. 请手动升级后重试.",
+        file=sys.stderr,
+    )
+    print(
+        f"    Auto-update failed {reason_en}. Please update manually.\n",
+        file=sys.stderr,
+    )
 
 
 def record_install(commit_sha: str, *, installed_file: Path = DEFAULT_INSTALLED_FILE) -> None:

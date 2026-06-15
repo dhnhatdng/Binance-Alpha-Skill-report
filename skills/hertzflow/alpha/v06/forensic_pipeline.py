@@ -2514,7 +2514,19 @@ def main() -> int:
     # Disable via BINANCE_ALPHA_NO_UPDATE_CHECK=1.
     try:
         from update_check import check_for_update
-        check_for_update()
+        _u = check_for_update()
+        # v0.9.5: auto-update on detection (codex audit Finding 1).
+        # When update_check successfully ran `npx skills update hertzflow`,
+        # the files on disk are now newer than what THIS process loaded.
+        # Exit cleanly so the user can re-invoke and pick up the new code.
+        # IMPORTANT: only the CLI entry-point may exit here. update_check
+        # itself NEVER calls sys.exit (codex audit Finding 1: imported
+        # library users like Discord bot batches must not be killed by
+        # an upstream `check_for_update()` call).
+        if isinstance(_u, dict) and _u.get("auto_updated"):
+            return 0
+    except SystemExit:
+        raise   # never silently swallow SystemExit; preserve exit code
     except Exception:
         pass   # update check never blocks main pipeline
 
