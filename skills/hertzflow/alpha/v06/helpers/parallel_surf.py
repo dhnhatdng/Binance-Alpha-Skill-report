@@ -199,7 +199,12 @@ def _run_one(input_path: str, max_attempts: int = 4) -> tuple[str, dict, float]:
     if _guard_err is not None:
         return (input_path, _guard_err, 0.0)
 
+    # v0.9.4: track attempts + wall time for credit accounting. Even failed
+    # retry attempts get billed (timeout retry storms must be visible).
+    _attempts_billed = 0
+    _seconds_total = 0.0
     for attempt in range(1, max_attempts + 1):
+        _attempts_billed += 1
         t0 = time.perf_counter()
         # Attempt 1: @file form (older surf CLI / current alpha.40)
         proc = subprocess.run(
@@ -234,6 +239,7 @@ def _run_one(input_path: str, max_attempts: int = 4) -> tuple[str, dict, float]:
             )
             elapsed = time.perf_counter() - t0
 
+        _seconds_total += elapsed
         if proc.returncode != 0:
             resp: dict = {"error": {"code": "SURF_EXIT", "message": proc.stderr.strip() or proc.stdout.strip()[:500]}}
         else:
@@ -244,10 +250,12 @@ def _run_one(input_path: str, max_attempts: int = 4) -> tuple[str, dict, float]:
 
         # Success = a response that is not a dict carrying an "error" key.
         if not (isinstance(resp, dict) and "error" in resp):
+            _record_credit(resp, _seconds_total, _attempts_billed, success=True)
             return (input_path, resp, elapsed)
 
         # Permanent request/schema error → fail fast (no point retrying).
         if not _is_transient_error(resp):
+            _record_credit(None, _seconds_total, _attempts_billed, success=False)
             return (input_path, resp, elapsed)
 
         # Transient — back off (with jitter) and retry.
@@ -255,7 +263,32 @@ def _run_one(input_path: str, max_attempts: int = 4) -> tuple[str, dict, float]:
         if attempt < max_attempts:
             time.sleep(min(2 ** attempt - 1, 7) + random.uniform(0, 0.5 * attempt))
 
+    _record_credit(None, _seconds_total, _attempts_billed, success=False)
     return (input_path, last_resp, last_elapsed)
+
+
+def _record_credit(resp: dict | None, seconds: float, attempts: int, success: bool) -> None:
+    """v0.9.4: report this query's surf usage to the section_a_scope
+    credit accumulator. Lazy import to avoid circular import (section_a_scope
+    imports run_parallel from here). Silently no-ops if section_a_scope can't
+    be imported — credit accounting must NEVER break the pipeline."""
+    try:
+        from section_a_scope import _surf_credit_add  # lazy: break cycle
+    except Exception:
+        return
+    credits = 0.0
+    if resp:
+        try:
+            credits = float((resp.get("meta") or {}).get("credits_used") or 0)
+        except (TypeError, ValueError, AttributeError):
+            credits = 0.0
+    try:
+        _surf_credit_add(
+            credits=credits, seconds=seconds,
+            attempts=attempts, success=success,
+        )
+    except Exception:
+        pass
 
 
 def run_parallel(input_paths: list[str], max_workers: int = 8) -> dict[str, dict]:

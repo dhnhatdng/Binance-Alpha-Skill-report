@@ -27,6 +27,7 @@ within surf's 30s budget.
 from __future__ import annotations
 
 import json
+import os
 from datetime import date, timedelta
 from typing import Any
 
@@ -35,6 +36,12 @@ from chain_router import (
     transfers_table,
     dex_trades_table,
 )
+from window_chunker import (  # v0.9.4
+    chunked_dates,
+    parallel_run_chunked,
+    merge_chunked_rows,
+    chunk_summary,
+)
 
 # surf enforces a 365-day window on `bsc_transfers` queries (and the
 # equivalent on other chains). Any wider span is rejected upfront with
@@ -42,6 +49,57 @@ from chain_router import (
 # - 365d so a listing-anchored floor like (listing - 365d) doesn't blow
 # up when the token has been listed for more than a year.
 _SURF_MAX_LOOKBACK_DAYS = 365
+
+# v0.9.4 round-2 codex fix #1: surf onchain-sql hard-caps max_rows at
+# 10000 (Codex CLO bug report 2026-06-12, confirmed in section_a_scope
+# error parsing comment). Stay safely below the cap for chunk_top_n
+# computations so default pipeline call (`top_n=100` → naive
+# `chunk_top_n = top_n * 100 = 10000` → `max_rows=10010`) doesn't
+# every-chunk-fail with INVALID_REQUEST.
+_SURF_SAFE_MAX_ROWS = 9000
+
+# v0.9.4: same heuristic as rule_11._is_short_window — short windows
+# collapse to a single chunk; long windows split to chunk_days=90.
+# Override via env on tokens where the default proves wrong (timeouts
+# at 200d → lower; surf back to normal → raise toward 400-500d).
+_SHORT_WINDOW_DAYS = int(os.environ.get("BINANCE_ALPHA_SHORT_WINDOW_DAYS", "300"))
+
+
+def _is_short_window(floor: str, ceiling: str | None = None) -> bool:
+    floor_d = date.fromisoformat(floor)
+    ceiling_d = date.fromisoformat(ceiling) if ceiling else date.today()
+    return (ceiling_d - floor_d).days <= _SHORT_WINDOW_DAYS
+
+
+def _single_chunk_or_chunker_dates(
+    floor: str, ceiling: str | None = None, chunk_days: int = 90,
+) -> list[tuple[str, str]]:
+    if _is_short_window(floor, ceiling):
+        ceiling_concrete = ceiling or date.today().isoformat()
+        return [(floor, ceiling_concrete)]
+    return chunked_dates(floor, ceiling or date.today().isoformat(), chunk_days=chunk_days)
+
+
+def _run_chunk_via_surf(sql: str, max_rows: int = 5000, base_timeout: int = 40) -> dict[str, Any]:
+    """v0.9.4: surf onchain-sql call shaped for parallel_run_chunked. Returns
+    {data: [...], _error?: str, meta: {...}}. Threads section_a_scope's retry
+    wrapper so 429 / transient surf errors get the same backoff treatment as
+    single-shot queries. Unlike rule_11's _run_one_chunk (which writes a
+    workdir file), this uses stdin so funding_attribution doesn't need a
+    workdir passed in.
+    """
+    from section_a_scope import _run_surf_with_retry
+    try:
+        doc, err = _run_surf_with_retry(
+            ["surf", "onchain-sql"],
+            stdin=json.dumps({"sql": sql, "max_rows": max_rows}),
+            base_timeout=base_timeout, max_attempts=4,
+        )
+    except Exception as e:
+        return {"_error": f"{type(e).__name__}: {e}"[:200], "data": []}
+    if not doc:
+        return {"_error": err or "surf returned no doc", "data": []}
+    return {"data": doc.get("data") or [], "meta": doc.get("meta") or {}}
 
 _DEAD = {
     "0x0000000000000000000000000000000000000000",
@@ -714,6 +772,32 @@ def discover_mint_authorities(
 #  - top_holders: balance ≈ 0 keeps them off top-30
 _SQL_HIGH_THROUGHPUT = """WITH ins AS (SELECT "to" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt_in, count() AS n_in FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date >= '{date_floor}' GROUP BY addr), outs AS (SELECT "from" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt_out, count() AS n_out FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date >= '{date_floor}' GROUP BY addr) SELECT ins.addr, ins.amt_in AS total_in, COALESCE(outs.amt_out, 0) AS total_out, ins.amt_in - COALESCE(outs.amt_out, 0) AS balance, ins.n_in + COALESCE(outs.n_out, 0) AS n_tx FROM ins LEFT JOIN outs ON ins.addr = outs.addr WHERE ins.amt_in >= {min_throughput} AND ins.amt_in <= {max_throughput} AND abs(ins.amt_in - COALESCE(outs.amt_out, 0)) < ins.amt_in * {max_balance_frac} AND ins.n_in + COALESCE(outs.n_out, 0) >= {min_n_tx} AND ins.addr != '0x0000000000000000000000000000000000000000' AND ins.addr != '0x000000000000000000000000000000000000dead' ORDER BY ins.amt_in DESC LIMIT {top_n}"""
 
+# v0.9.4 + codex M41 fixes: chunkable variant. Per-chunk SQL uses BETWEEN
+# (partition pruning) so each chunk only scans ~30d of bsc_transfers. The
+# 2-layer CTE form is preserved per chunk because at 30d window the ins/outs
+# materialization is small enough that ClickHouse handles it inside 30s.
+#
+# Filters that survive per-chunk:
+#   - addr != 0x0 / 0xdead (correctness — these are noise)
+#   - amt_in >= chunk_min_in (1% floor of global threshold; bounds result
+#     size without divisor undercount, see chunk_min_in comment)
+#   - amt_in <= max_throughput (Codex Fix 2: this filter is MONOTONIC —
+#     per-chunk amt_in ≤ global amt_in, so per-chunk > max implies global
+#     > max. Safe to pre-filter at SQL. Without this, wash bots with huge
+#     per-chunk amt_in fill the LIMIT and push real operators out.)
+#
+# Filters MOVED to Python post-merge (cannot apply per-chunk correctly):
+#   - min_throughput (totals only known after merge)
+#   - max_balance_frac (balance = sum_in - sum_out, totals)
+#   - min_n_tx (count distributes via merge)
+#   - ORDER BY amt_in DESC LIMIT top_n (global top)
+#
+# chunk_top_n is a per-chunk safety cap. Caller queries LIMIT chunk_top_n+1
+# and fails loud if exactly chunk_top_n+1 rows returned (Codex Fix 2:
+# truncation detection — capped chunk = incomplete merge input, must NOT
+# emit clean empty findings).
+_SQL_HIGH_THROUGHPUT_CHUNK = """WITH ins AS (SELECT "to" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt_in, count() AS n_in FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}' GROUP BY addr), outs AS (SELECT "from" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt_out, count() AS n_out FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}' GROUP BY addr) SELECT ins.addr AS addr, ins.amt_in AS total_in, COALESCE(outs.amt_out, 0) AS total_out, ins.n_in AS n_in, COALESCE(outs.n_out, 0) AS n_out FROM ins LEFT JOIN outs ON ins.addr = outs.addr WHERE ins.amt_in >= {chunk_min_in} AND ins.amt_in <= {max_throughput} AND ins.addr != '0x0000000000000000000000000000000000000000' AND ins.addr != '0x000000000000000000000000000000000000dead' ORDER BY ins.amt_in DESC LIMIT {chunk_top_n_plus_1}"""
+
 
 def discover_high_throughput_dumpers(
     *,
@@ -789,48 +873,99 @@ def discover_high_throughput_dumpers(
     if max_throughput is None:
         max_throughput = (float(total_supply) * 0.05) if total_supply else 5e17
 
-    sql = _SQL_HIGH_THROUGHPUT.format(
-        transfers=transfers_table(), ca_lc=ca,
-        date_floor=date_floor_clamped, min_throughput=min_throughput,
-        max_throughput=max_throughput, max_balance_frac=max_balance_frac,
-        min_n_tx=min_n_tx, top_n=top_n,
+    # v0.9.4 + codex M41 Fix 5: chunked path for long windows. Short windows
+    # collapse to a single chunk → SQL shape preserved as BETWEEN, identical
+    # behavior to v0.9.3 single-shot. Long windows split to 30d chunks
+    # (NOT 90d — funding_attribution heavy CTE is per-chunk heavier than
+    # rule_11's selective mint queries, so 90d may still hit 30s budget on
+    # EVAA-class tokens. 30d × 12-13 chunks is a known-safe budget).
+    transfers = transfers_table()
+    chunks = _single_chunk_or_chunker_dates(date_floor_clamped, None, chunk_days=30)
+    # Per-chunk min_in floor: use 1% of global threshold (NOT divide by
+    # N_chunks). Reason: an N_chunks divisor undercounts wallets whose
+    # throughput is uneven across chunks. 1% floor (= 10K for 1M threshold)
+    # keeps all chunks contributing to the global total. Hard floor 1000
+    # to bound result size on partitions with millions of dust addrs.
+    chunk_min_in = max(1000.0, float(min_throughput) * 0.01)
+    # v0.9.4 round-2 codex Fix 1: cap chunk_top_n below surf 10K max_rows
+    # ceiling. Naïve top_n * 100 with default top_n=100 yields 10000 →
+    # LIMIT 10001 → max_rows 10010 → every chunk rejected. Stay safe.
+    chunk_top_n = min(top_n * 100, _SURF_SAFE_MAX_ROWS - 10)
+
+    def _sql_fn(chunk_floor: str, chunk_ceiling: str) -> dict[str, Any]:
+        # Codex Fix 2: LIMIT chunk_top_n + 1. If response has exactly
+        # that many rows, the chunk was capped → not a complete merge
+        # input → must propagate as truncation error, not silently merge.
+        sql = _SQL_HIGH_THROUGHPUT_CHUNK.format(
+            transfers=transfers, ca_lc=ca,
+            chunk_floor=chunk_floor, chunk_ceiling=chunk_ceiling,
+            chunk_min_in=chunk_min_in, max_throughput=max_throughput,
+            chunk_top_n_plus_1=chunk_top_n + 1,
+        )
+        return _run_chunk_via_surf(sql, max_rows=chunk_top_n + 10, base_timeout=40)
+
+    chunk_results = parallel_run_chunked(_sql_fn, chunks)
+    errs = [r.get("_error") for r in chunk_results if r.get("_error")]
+    rows_per_chunk = [r.get("data") or [] for r in chunk_results]
+
+    # Codex Fix 2: detect per-chunk truncation. If any chunk returned
+    # exactly chunk_top_n + 1 rows, the LIMIT was hit → chunk's contribution
+    # to the global merge is incomplete → fail loud.
+    truncated_chunks = sum(
+        1 for r in rows_per_chunk if len(r) > chunk_top_n
     )
 
-    try:
-        from section_a_scope import _run_surf_with_retry
-        doc, err = _run_surf_with_retry(
-            ["surf", "onchain-sql"],
-            stdin=json.dumps({"sql": sql, "max_rows": top_n + 10}),
-            base_timeout=60, max_attempts=4,
-        )
-    except Exception as e:
+    # Codex Fix 1 (CRITICAL): partial chunk error → empty + _error. v0.9.3
+    # single-shot semantics were "either complete data or hard error" —
+    # silently returning partial data from k of N chunks is a NEW silent
+    # failure mode where a true operator concentrated in the failing chunk
+    # vanishes from the result. Match v0.9.3 strictness: any chunk error
+    # → empty result + _error so caller behaves the same as before.
+    if errs or truncated_chunks > 0:
         return {
             "dumpers": [], "summary": {
                 "n_dumpers": 0, "total_throughput": 0.0,
             },
-            "_error": f"exception: {str(e)[:120]}",
-        }
-
-    if not doc:
-        return {
-            "dumpers": [], "summary": {
-                "n_dumpers": 0, "total_throughput": 0.0,
+            "_error": (
+                f"{len(errs)}/{len(chunks)} chunks errored, "
+                f"{truncated_chunks}/{len(chunks)} chunks truncated at LIMIT; "
+                f"first chunk error: {errs[0] if errs else 'none'}"
+            ),
+            "_debug": {
+                "date_floor_clamped": date_floor_clamped,
+                "chunks": chunk_summary(chunks),
+                "chunk_errs": len(errs),
+                "chunk_truncated": truncated_chunks,
             },
-            "_error": err or "surf returned no doc",
         }
 
+    # Merge by addr — SUM is distributive over the chunk partition.
+    # n_in / n_out are per-chunk counts; total n_tx = sum(n_in)+sum(n_out).
+    merged = merge_chunked_rows(
+        rows_per_chunk, key_field="addr",
+        sum_fields=["total_in", "total_out", "n_in", "n_out"],
+    )
+
+    # Apply Python-side filters (moved from SQL HAVING / WHERE):
+    #   min_throughput / max_throughput, max_balance_frac, min_n_tx
+    # Order by total_in DESC, LIMIT top_n — matches v0.9.3 single-shot
+    # ORDER BY ins.amt_in DESC LIMIT top_n semantics.
     dumpers: list[dict[str, Any]] = []
     total_through = 0.0
-    for row in (doc.get("data") or []):
-        addr = (row.get("addr") or "").lower()
+    for r in merged:
+        addr = (r.get("addr") or "").lower()
         if not _chain_is_valid_addr(addr) or addr in _DEAD:
             continue
-        try:
-            tin = float(row.get("total_in") or 0)
-            tout = float(row.get("total_out") or 0)
-            bal = float(row.get("balance") or 0)
-            n_tx = int(row.get("n_tx") or 0)
-        except (TypeError, ValueError):
+        tin = float(r.get("total_in") or 0)
+        tout = float(r.get("total_out") or 0)
+        bal = tin - tout
+        n_tx = int((r.get("n_in") or 0) + (r.get("n_out") or 0))
+        # Python-side filters (parity with v0.9.3 SQL HAVING):
+        if tin < min_throughput or tin > max_throughput:
+            continue
+        if tin > 0 and abs(bal) >= tin * max_balance_frac:
+            continue
+        if n_tx < min_n_tx:
             continue
         is_excluded = addr in exclude_set
         dumpers.append({
@@ -841,8 +976,12 @@ def discover_high_throughput_dumpers(
             "n_tx": n_tx,
             "is_excluded": is_excluded,
         })
-        if not is_excluded:
-            total_through += tin
+    # Sort + LIMIT (matches v0.9.3 ORDER BY ins.amt_in DESC LIMIT top_n)
+    dumpers.sort(key=lambda d: d["total_in"], reverse=True)
+    dumpers = dumpers[:top_n]
+    for d in dumpers:
+        if not d["is_excluded"]:
+            total_through += d["total_in"]
 
     return {
         "dumpers": dumpers,
@@ -856,6 +995,9 @@ def discover_high_throughput_dumpers(
             "max_balance_frac": max_balance_frac,
             "min_n_tx": min_n_tx,
             "exclude_n": len(exclude_set),
+            "chunks": chunk_summary(chunks),
+            "chunk_min_in": chunk_min_in,
+            "chunk_errs": len(errs),
         },
     }
 
@@ -870,6 +1012,22 @@ def discover_high_throughput_dumpers(
 # senders + recipients. Python label filter narrows to true CEX-origin
 # fan-out.
 _SQL_FANOUT_HUB_CANDIDATES = """WITH recipient_amounts AS (SELECT "from" AS hub, "to" AS recipient, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS rec_amt FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date >= '{date_floor}' AND "to" != '0x0000000000000000000000000000000000000000' AND "to" != '0x000000000000000000000000000000000000dead' GROUP BY hub, recipient HAVING rec_amt >= {min_per_recipient}) SELECT hub, count() AS n_recipients, sum(rec_amt) AS total_out, min(rec_amt) AS min_per, avg(rec_amt) AS avg_per FROM recipient_amounts GROUP BY hub HAVING n_recipients BETWEEN {min_recipients} AND {max_recipients} AND total_out >= {min_total_out} ORDER BY total_out DESC LIMIT {top_n}"""
+
+# v0.9.4 + codex M41 fixes: chunkable variant. Per-chunk SQL outputs raw
+# (hub, recipient, rec_amt) pairs — the outer GROUP BY hub + hub-level
+# HAVING happens entirely in Python after the per-(hub, recipient) merge.
+#
+# Per-chunk filter `rec_amt >= chunk_min_rec_amt` uses a 1% floor (NOT
+# N_chunks divisor — see discover_high_throughput_dumpers comment for
+# undercount-avoidance rationale). addr != 0x0 / 0xdead enforced in WHERE
+# rather than HAVING (same effect, cheaper on the ClickHouse plan).
+#
+# LIMIT chunk_top_pairs+1: Codex Fix 3 — caller queries with +1 cap and
+# fails loud if exactly chunk_top_pairs+1 rows returned (truncation
+# detected). Without truncation detect, a capped chunk silently feeds
+# incomplete data to the hub merge, where junk pairs can mask a real
+# operator hub.
+_SQL_FANOUT_HUB_CANDIDATES_CHUNK = """SELECT "from" AS hub, "to" AS recipient, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS rec_amt FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}' AND "to" != '0x0000000000000000000000000000000000000000' AND "to" != '0x000000000000000000000000000000000000dead' GROUP BY hub, recipient HAVING rec_amt >= {chunk_min_rec_amt} ORDER BY rec_amt DESC LIMIT {chunk_top_pairs_plus_1}"""
 
 # v0.7.24e.1: merge senders + recipients into 1 UNION ALL SQL.
 # Both subqueries use IN {hub_in_list} on the same transfers table /
@@ -946,35 +1104,100 @@ def discover_cex_fanout_hubs(
     surf_window_floor = (date.today() - timedelta(days=_SURF_MAX_LOOKBACK_DAYS)).isoformat()
     date_floor_clamped = surf_window_floor if date_floor < surf_window_floor else date_floor
 
-    # Phase 1: find hub candidates by fan-out signature
-    sql_hubs = _SQL_FANOUT_HUB_CANDIDATES.format(
-        transfers=transfers_table(), ca_lc=ca,
-        date_floor=date_floor_clamped,
-        min_per_recipient=min_per_recipient,
-        min_recipients=min_recipients, max_recipients=max_recipients,
-        min_total_out=min_total_out, top_n=top_n_hubs,
-    )
+    # v0.9.4 + codex M41 Fix 5: Phase 1 chunked. Short windows collapse to
+    # single chunk (no regression for new tokens). Long windows split to
+    # 30d chunks (heavier than rule_11 per-chunk; 90d may still hit 30s
+    # budget on EVAA-class tokens).
+    transfers = transfers_table()
+    chunks = _single_chunk_or_chunker_dates(date_floor_clamped, None, chunk_days=30)
+    # Per-chunk per-(hub, recipient) min: 1% of global threshold.
+    chunk_min_rec_amt = max(1000.0, float(min_per_recipient) * 0.01)
+    # Per-chunk LIMIT: bounded below surf max_rows cap so default pipeline
+    # call (top_n_hubs=30, max_recipients=50 → naïve 30*50*5=7500) stays
+    # under 9000 budget. Same _SURF_SAFE_MAX_ROWS guard as high_throughput.
+    chunk_top_pairs = min(_SURF_SAFE_MAX_ROWS, top_n_hubs * max_recipients * 5)
 
-    try:
-        from section_a_scope import _run_surf_with_retry
-        doc_hubs, err_hubs = _run_surf_with_retry(
-            ["surf", "onchain-sql"],
-            stdin=json.dumps({"sql": sql_hubs, "max_rows": top_n_hubs + 5}),
-            base_timeout=60, max_attempts=4,
+    def _sql_fn(chunk_floor: str, chunk_ceiling: str) -> dict[str, Any]:
+        # Codex Fix 3: LIMIT+1 truncation detection.
+        sql = _SQL_FANOUT_HUB_CANDIDATES_CHUNK.format(
+            transfers=transfers, ca_lc=ca,
+            chunk_floor=chunk_floor, chunk_ceiling=chunk_ceiling,
+            chunk_min_rec_amt=chunk_min_rec_amt,
+            chunk_top_pairs_plus_1=chunk_top_pairs + 1,
         )
-    except Exception as e:
+        return _run_chunk_via_surf(sql, max_rows=chunk_top_pairs + 10, base_timeout=40)
+
+    chunk_results = parallel_run_chunked(_sql_fn, chunks)
+    errs_p1 = [r.get("_error") for r in chunk_results if r.get("_error")]
+    rows_per_chunk_p1 = [r.get("data") or [] for r in chunk_results]
+    # Codex Fix 3: detect per-chunk truncation.
+    truncated_p1 = sum(1 for r in rows_per_chunk_p1 if len(r) > chunk_top_pairs)
+
+    # Codex Fix 1 (CRITICAL): partial chunk error / truncation → empty +
+    # _error. v0.9.3 single-shot semantics. A capped chunk full of junk
+    # pairs would silently mask a real operator hub in Python merge.
+    if errs_p1 or truncated_p1 > 0:
         return {
             "hubs": [], "summary": _empty_fanout_summary(),
-            "_error": f"phase1 exception: {str(e)[:120]}",
+            "_error": (
+                f"phase1 {len(errs_p1)}/{len(chunks)} chunks errored, "
+                f"{truncated_p1}/{len(chunks)} chunks truncated at LIMIT; "
+                f"first: {errs_p1[0] if errs_p1 else 'none'}"
+            ),
+            "_debug": {"date_floor_clamped": date_floor_clamped,
+                       "chunks": chunk_summary(chunks),
+                       "chunk_errs_p1": len(errs_p1),
+                       "chunk_truncated_p1": truncated_p1},
         }
 
-    if not doc_hubs:
-        return {
-            "hubs": [], "summary": _empty_fanout_summary(),
-            "_error": err_hubs or "phase1 no doc",
-        }
+    pair_rows: list[dict[str, Any]] = []
+    for r in rows_per_chunk_p1:
+        pair_rows.extend(r)
 
-    hub_candidates = doc_hubs.get("data") or []
+    # Python merge: SUM rec_amt by (hub, recipient) across chunks
+    pair_totals: dict[tuple[str, str], float] = {}
+    for row in pair_rows:
+        h = (row.get("hub") or "").lower()
+        rc = (row.get("recipient") or "").lower()
+        if not h or not rc:
+            continue
+        try:
+            pair_totals[(h, rc)] = pair_totals.get((h, rc), 0.0) + float(row.get("rec_amt") or 0)
+        except (TypeError, ValueError):
+            continue
+
+    # Apply per-recipient filter (parity with v0.9.3 inner HAVING)
+    pair_totals = {k: v for k, v in pair_totals.items() if v >= min_per_recipient}
+
+    # Group by hub: count recipients, sum total_out, min/avg per recipient
+    hub_aggs: dict[str, dict[str, Any]] = {}
+    for (h, rc), amt in pair_totals.items():
+        agg = hub_aggs.setdefault(h, {
+            "hub": h, "n_recipients": 0, "total_out": 0.0,
+            "min_per": float("inf"), "amt_sum": 0.0,
+        })
+        agg["n_recipients"] += 1
+        agg["total_out"] += amt
+        agg["amt_sum"] += amt
+        if amt < agg["min_per"]:
+            agg["min_per"] = amt
+
+    # Apply hub-level filter (parity with v0.9.3 outer HAVING)
+    hub_candidates: list[dict[str, Any]] = []
+    for h, agg in hub_aggs.items():
+        if not (min_recipients <= agg["n_recipients"] <= max_recipients):
+            continue
+        if agg["total_out"] < min_total_out:
+            continue
+        hub_candidates.append({
+            "hub": h, "n_recipients": agg["n_recipients"],
+            "total_out": agg["total_out"],
+            "min_per": agg["min_per"],
+            "avg_per": agg["amt_sum"] / max(1, agg["n_recipients"]),
+        })
+    hub_candidates.sort(key=lambda r: r["total_out"], reverse=True)
+    hub_candidates = hub_candidates[:top_n_hubs]
+
     if not hub_candidates:
         return {
             "hubs": [], "summary": {
@@ -982,7 +1205,9 @@ def discover_cex_fanout_hubs(
                 "total_cex_inflow_tokens": 0.0,
                 "total_fanout_recipients": 0,
             },
-            "_debug": {"date_floor_clamped": date_floor_clamped},
+            "_debug": {"date_floor_clamped": date_floor_clamped,
+                       "chunks": chunk_summary(chunks),
+                       "chunk_errs_p1": len(errs_p1)},
         }
 
     hub_addrs = [(r.get("hub") or "").lower() for r in hub_candidates]
@@ -1030,6 +1255,16 @@ def discover_cex_fanout_hubs(
             "hubs": [], "summary": _empty_fanout_summary(),
             "_error": f"phase2 senders exception: {str(e)[:120]}",
         }
+    # v0.9.4 round-2 codex Fix 2: Phase 2 surf failure must fail loud.
+    # Pre-fix: doc_senders=None silently became empty sender_rows → all
+    # candidate hubs dropped because no top_sender resolved → returned
+    # `hubs: []` with no _error. Caller treats clean empty as "no hubs
+    # found" instead of "lookup failed".
+    if not doc_senders:
+        return {
+            "hubs": [], "summary": _empty_fanout_summary(),
+            "_error": f"phase2 senders surf failed: {err_senders or 'no doc'}",
+        }
     try:
         doc_recipients, err_recipients = _run_surf_with_retry(
             ["surf", "onchain-sql"],
@@ -1041,12 +1276,20 @@ def discover_cex_fanout_hubs(
             "hubs": [], "summary": _empty_fanout_summary(),
             "_error": f"phase2 recipients exception: {str(e)[:120]}",
         }
+    # Same fail-loud guard for recipients side. Without it, hubs can be
+    # confirmed (top_sender resolved CEX) but `net_fanout_tokens_total=0`
+    # because all recipient_rows are empty — false "no fan-out" verdict.
+    if not doc_recipients:
+        return {
+            "hubs": [], "summary": _empty_fanout_summary(),
+            "_error": f"phase2 recipients surf failed: {err_recipients or 'no doc'}",
+        }
 
     # Truncation detection: if the returned row count equals or exceeds
     # the cap, the result set was likely clipped — net metrics computed
     # from this would silently understate fan-out and must NOT be emitted.
-    sender_rows = (doc_senders.get("data") if doc_senders else []) or []
-    recipient_rows = (doc_recipients.get("data") if doc_recipients else []) or []
+    sender_rows = doc_senders.get("data") or []
+    recipient_rows = doc_recipients.get("data") or []
     senders_truncated = len(sender_rows) >= senders_max_rows
     recipients_truncated = len(recipient_rows) >= recipients_max_rows
 
@@ -1100,11 +1343,18 @@ def discover_cex_fanout_hubs(
                 f"AND \"to\" != '0x000000000000000000000000000000000000dead' "
                 f"GROUP BY counterparty ORDER BY amt DESC LIMIT 1000"
             )
+            # v0.9.4 round-2 codex Fix 3: bump max_attempts 2 → 4 for parity
+            # with all other phase-2 / chunk surf calls (4 = repo retry
+            # standard, see _run_surf_with_retry docstring). Per-hub recipient
+            # data is load-bearing for `net_fanout_tokens_total` — a single
+            # silent failure here previously produced bulk-fallback data
+            # silently and dropped the truncation signal.
+            per_hub_err: str | None = None
             try:
-                d_per, _ = _run_surf_with_retry(
+                d_per, per_hub_err = _run_surf_with_retry(
                     ["surf", "onchain-sql"],
                     stdin=json.dumps({"sql": sql_per_hub, "max_rows": 1005}),
-                    base_timeout=30, max_attempts=2,
+                    base_timeout=30, max_attempts=4,
                 )
                 if d_per:
                     rows = (d_per.get("data") or [])
@@ -1115,15 +1365,27 @@ def discover_cex_fanout_hubs(
                         "n_tx": r.get("n_tx"),
                         "first_tx": r.get("first_tx"),
                     } for r in rows]
+                else:
+                    # Codex Fix 3: surf failed (None doc). Preserve bulk
+                    # partial rows for this hub AND set recipients_truncated
+                    # = True so the downstream net% claim is gated.
+                    print(f"[fanout] per-hub surf failed for {hub_addr[:14]}: "
+                          f"{per_hub_err or 'no doc'}", file=_sys.stderr)
+                    per_hub_complete[hub_addr] = recipients_per_hub.get(hub_addr, [])
+                    recipients_truncated = True
             except Exception as e:
                 print(f"[fanout] per-hub query failed for {hub_addr[:14]}: {e}", file=_sys.stderr)
                 # 保留 bulk 部分数据 fallback
                 per_hub_complete[hub_addr] = recipients_per_hub.get(hub_addr, [])
+                recipients_truncated = True
         # Override recipients_per_hub with complete data
         recipients_per_hub = per_hub_complete
-        # truncation flag: 单 hub > 1000 才算 truncated
+        # Codex Fix 3 (revised): truncation flag uses BOTH the bulk
+        # truncation signal we just OR'd into recipients_truncated AND
+        # the "any hub has ≥ 1000 recipients" check from before. Bulk
+        # surf failures no longer mask incomplete data as "complete".
         any_per_hub_full = any(len(rs) >= 1000 for rs in per_hub_complete.values())
-        recipients_truncated = any_per_hub_full
+        recipients_truncated = recipients_truncated or any_per_hub_full
 
     # Resolve Arkham labels for top senders
     unique_source_addrs = list({

@@ -99,6 +99,44 @@ _COINGECKO_CACHE_TTL_SECS = 24 * 3600
 _ADDR_RE_LOCAL = re.compile(r"0x[0-9a-f]{40}")
 
 
+# v0.9.4: surf credit accumulator. Every successful onchain-sql / token-
+# holders / wallet-labels-batch / project-detail call returns
+# `meta.credits_used` in its response. We accumulate the total + per-call
+# count + cumulative time so forensic_pipeline.py can snapshot a delta
+# around each section and write `_credits_used` / `_surf_calls` /
+# `_surf_seconds` into the skeleton. This was previously fake: only the
+# 3 skipped sections (cross_sym / wash / flow_operators) had non-None
+# entries, and they were zero.
+import threading as _threading
+_CREDIT_LOCK = _threading.Lock()
+_CREDIT_STATE = {
+    "credits": 0.0,
+    "calls": 0,
+    "seconds": 0.0,
+    # Per-attempt counter — calls that failed + retried bill partial
+    # scan credits even when they ultimately succeed. We separate
+    # successful surface metric (`calls`) from billing metric (`attempts`)
+    # so reports can show "X useful calls, Y attempts billed".
+    "attempts": 0,
+}
+
+
+def _surf_credit_snapshot() -> dict[str, Any]:
+    """Atomic read of cumulative surf usage. Pipeline calls this before
+    and after each section to compute a per-section delta."""
+    with _CREDIT_LOCK:
+        return dict(_CREDIT_STATE)
+
+
+def _surf_credit_add(credits: float, seconds: float, attempts: int = 1, success: bool = True) -> None:
+    with _CREDIT_LOCK:
+        _CREDIT_STATE["credits"] += float(credits or 0)
+        _CREDIT_STATE["seconds"] += float(seconds or 0)
+        _CREDIT_STATE["attempts"] += int(attempts or 0)
+        if success:
+            _CREDIT_STATE["calls"] += 1
+
+
 def _run_surf_with_retry(
     cmd: list[str],
     stdin: str | None = None,
@@ -127,7 +165,11 @@ def _run_surf_with_retry(
       - JSON parsed OK but contains top-level "error" field
     """
     last_err = "no_attempt"
+    attempts_billed = 0
+    seconds_total = 0.0
     for attempt in range(1, max_attempts + 1):
+        attempts_billed += 1
+        t0 = time.perf_counter()
         try:
             kwargs: dict[str, Any] = {
                 "capture_output": True, "text": True,
@@ -140,7 +182,9 @@ def _run_surf_with_retry(
             proc = subprocess.run(cmd, **kwargs)
         except (subprocess.TimeoutExpired, OSError) as e:
             last_err = f"subprocess_error: {str(e)[:120]}"
+            seconds_total += time.perf_counter() - t0
         else:
+            seconds_total += time.perf_counter() - t0
             if proc.returncode != 0:
                 # v0.8.5.2: surf 返 INVALID_REQUEST 时 JSON 写 stdout 不写 stderr.
                 # Codex CLO bug report (2026-06-12): max_rows=50000 撞 10K cap,
@@ -157,10 +201,30 @@ def _run_surf_with_retry(
                     if isinstance(doc, dict) and doc.get("error"):
                         last_err = f"surf_error: {str(doc['error'])[:120]}"
                     else:
+                        # v0.9.4 credit accounting: success path. credits_used
+                        # lives at meta.credits_used per surf 2026-06 schema;
+                        # absent = legacy endpoint → count as 0 credits but
+                        # still bump call counter so wall-time totals stay
+                        # honest.
+                        credits = 0.0
+                        try:
+                            credits = float((doc.get("meta") or {}).get("credits_used") or 0)
+                        except (TypeError, ValueError, AttributeError):
+                            credits = 0.0
+                        _surf_credit_add(
+                            credits=credits, seconds=seconds_total,
+                            attempts=attempts_billed, success=True,
+                        )
                         return doc, None
         # transient — backoff and retry. 1s, 3s, 7s (cap)
         if attempt < max_attempts:
             time.sleep(min(2 ** attempt - 1, 7))
+    # All attempts failed. Still record the attempt count + wall time
+    # (credit=0 since surf timeouts on the platform side may or may not
+    # bill, we conservatively log 0 — pipeline reports "attempts=N for 0
+    # credits" so a timeout retry storm is visible).
+    _surf_credit_add(credits=0, seconds=seconds_total,
+                     attempts=attempts_billed, success=False)
     return None, last_err
 
 

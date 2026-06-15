@@ -495,6 +495,24 @@ def build_skeleton(
     timings: dict[str, float] = {}
     raw_sections: dict[str, "object"] = {}
 
+    # v0.9.4: snapshot surf credit cumulative state BEFORE any sections
+    # run. Pipeline finalization (return path) subtracts to get this CA's
+    # credit usage. Long-lived daemons that build_skeleton multiple times
+    # need this delta — module-global counter would otherwise add prior
+    # runs into the current CA's number.
+    try:
+        # NOTE: use bare `section_a_scope` import (NOT `helpers.section_a_scope`).
+        # Python caches modules by import name — `helpers.section_a_scope` and
+        # `section_a_scope` resolve to TWO module instances even though backed
+        # by the same .py file. parallel_surf's lazy hook writes to the bare
+        # name; pipeline must read the same instance.
+        from section_a_scope import _surf_credit_snapshot as _credit_snap
+        _credits_before_snapshot = _credit_snap()
+    except Exception:
+        _credits_before_snapshot = {
+            "credits": 0.0, "calls": 0, "seconds": 0.0, "attempts": 0,
+        }
+
     # v0.7.20 codex Round 2 HIGH fix: reset the chain router to a known
     # default at the START of every build_skeleton call. In a single-shot
     # CLI this is a no-op (router defaults to "bsc"), but if a long-lived
@@ -2342,6 +2360,28 @@ def build_skeleton(
         import sys as _sys
         print(f"[address_role_resolver] failed (non-fatal): {_e}", file=_sys.stderr)
         skeleton["address_role_index"] = {}
+
+    # v0.9.4: surf credit accounting. Pre-v0.9.4 the skeleton's three
+    # `_credits_used=0` entries were leftover placeholders for skipped
+    # detectors (cross_sym / wash / flow_operators). Now we record the
+    # actual cumulative usage at top level so reports + monitoring can
+    # show real cost per CA — and surface retry-storm waste (timeout
+    # attempts billed for partial scan).
+    try:
+        # See entry-point comment: bare `section_a_scope` import — must match
+        # the module instance parallel_surf writes to.
+        from section_a_scope import _surf_credit_snapshot
+        _credits_after = _surf_credit_snapshot()
+        _b = _credits_before_snapshot
+        skeleton["_surf_credits"] = {
+            "credits_used": round(_credits_after["credits"] - _b["credits"], 2),
+            "successful_calls": _credits_after["calls"] - _b["calls"],
+            "billed_attempts": _credits_after["attempts"] - _b["attempts"],
+            "wall_seconds": round(_credits_after["seconds"] - _b["seconds"], 2),
+        }
+    except Exception as _e:
+        import sys as _sys
+        print(f"[surf_credit_accounting] failed (non-fatal): {_e}", file=_sys.stderr)
 
     return skeleton
 
