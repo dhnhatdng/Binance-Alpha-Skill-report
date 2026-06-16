@@ -284,6 +284,73 @@ def _curl_json(url: str, timeout_seconds: int = 8) -> dict[str, Any] | None:
 # JELLYJELLY "其他 (散户+未分类)  96,200,818% 占总供应" bug.
 _SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
 
+# v0.9.7 fix #2: public EVM RPC endpoints keyed by chain_id. Used by
+# `_fetch_evm_token_decimals` for the `decimals()` call (selector 0x313ce567).
+# Tier 1 public RPCs picked for stability + no API key requirement; fall
+# back chain-by-chain order = [primary, secondary] handled in fn.
+_EVM_RPC_URLS = {
+    "1":     ["https://ethereum.publicnode.com", "https://eth.llamarpc.com"],
+    "56":    ["https://bsc-dataseed.binance.org", "https://bsc.publicnode.com"],
+    "137":   ["https://polygon-rpc.com", "https://polygon.publicnode.com"],
+    "8453":  ["https://mainnet.base.org", "https://base.publicnode.com"],
+    "42161": ["https://arb1.arbitrum.io/rpc", "https://arbitrum.publicnode.com"],
+    "10":    ["https://mainnet.optimism.io", "https://optimism.publicnode.com"],
+    "43114": ["https://api.avax.network/ext/bc/C/rpc", "https://avalanche.publicnode.com"],
+}
+
+
+def _fetch_evm_token_decimals(ca: str, chain_id: str | int | None) -> int | None:
+    """v0.9.7 fix #2: read ERC20 `decimals()` via public EVM RPC.
+
+    Selector `0x313ce567` is `decimals()` in ABI. Result is a 32-byte
+    big-endian uint that fits a uint8. Returns the int value, or None on
+    any failure (RPC down / chain not in map / non-conforming contract /
+    HTTP 4xx-5xx).
+
+    Cost: 1 eth_call per CA, ~50-200ms. Cached by surf project-detail
+    side TBD; for now we re-query per CA per pipeline invocation (cheap).
+
+    Failure-safe: caller (section_a) reads None → chain_router fallback
+    to 18 → v0.9.6 behavior preserved.
+    """
+    if not ca:
+        return None
+    chain_key = str(chain_id) if chain_id is not None else "56"
+    rpc_urls = _EVM_RPC_URLS.get(chain_key)
+    if not rpc_urls:
+        return None
+    payload = json.dumps({
+        "jsonrpc": "2.0", "id": 1, "method": "eth_call",
+        "params": [{"to": ca, "data": "0x313ce567"}, "latest"],
+    })
+    for rpc_url in rpc_urls:
+        try:
+            proc = subprocess.run(
+                ["curl", "-sS", "--max-time", "5",
+                 "-H", "Content-Type: application/json",
+                 "-X", "POST", "-d", payload, rpc_url],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=7, check=False,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            continue
+        if proc.returncode != 0:
+            continue
+        try:
+            doc = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            continue
+        result = (doc or {}).get("result")
+        if not result or not isinstance(result, str) or not result.startswith("0x"):
+            continue
+        # 32-byte uint encoded hex string; trailing 2 hex chars = uint8
+        # decimals value. e.g. "0x0000...0012" = 18, "0x0000...0006" = 6.
+        try:
+            return int(result, 16)
+        except (TypeError, ValueError):
+            continue
+    return None
+
 
 def fetch_solana_spl_supply(mint: str, timeout_seconds: int = 8) -> dict[str, Any] | None:
     """Return the on-chain SPL mint's `{decimals, raw_amount, ui_amount}`
@@ -1181,6 +1248,23 @@ def run(ca: str) -> dict[str, Any]:
         if spl:
             chain_decimals = spl.get("decimals")
             chain_total_supply_ui = spl.get("ui_amount")
+    else:
+        # v0.9.7 fix #2: EVM `decimals()` RPC lookup. Pre-v0.9.7 every SQL
+        # hardcoded `/1e18` (the 18-decimal default). FOLKS empirical
+        # (6 decimals) → all token amounts in skeleton were off by 1e12.
+        # Failure-safe: any RPC error leaves chain_decimals=None → router
+        # falls back to 18 → v0.9.6 behavior preserved.
+        chain_decimals = _fetch_evm_token_decimals(ca_lower, chain_id)
+
+    # v0.9.7: propagate to chain_router so every helper's SQL builder uses
+    # the correct divisor instead of hardcoded `/1e18`.
+    try:
+        from chain_router import set_token_decimals
+        set_token_decimals(chain_decimals)
+    except Exception as _e:
+        import sys as _sys
+        print(f"[section_a] decimals propagate failed (non-fatal): {_e}",
+              file=_sys.stderr)
 
     return {
         "scope_ok": True,

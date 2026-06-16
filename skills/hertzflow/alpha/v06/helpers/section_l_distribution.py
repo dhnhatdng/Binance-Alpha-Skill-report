@@ -58,6 +58,84 @@ def _role_label(role: str) -> str:
     return t(f"role.{role}.label")
 
 
+def _arkham_lockup_from_top_holders(top_addrs: list[str]) -> set[str]:
+    """v0.9.7 fix #1 (FOLKS Sablier 2026-06-16): batch Arkham label lookup
+    on Top 50 holders, return set of addrs whose label matches the
+    vesting/multisig/treasury regex (= "project-controlled supply pool",
+    not retail).
+
+    Why: rule_11 receivers only cover m6 depth-1 wallets. Vesting
+    contracts often sit 2-3 hops down (treasury → Sablier funder →
+    Sablier Lockup → recipients). They land in Top 50 holders but were
+    classified as "OTHER" because lockup_set didn't include them.
+    FOLKS empirical: Sablier Lockup NFT held 4.22M FOLKS (27.7% of
+    circulating) as "其他 (散户+未分类)" in v0.9.6.
+
+    Cost: 1 wallet-labels-batch call (~1-2 credits / 50 addrs). Same
+    helper used by rule_11 / cross_sym / flow_operators sections.
+
+    Failure-safe: any error returns empty set → caller fallback is
+    v0.9.6 behavior (m6-only lockup_set). Never regresses.
+    """
+    if not top_addrs:
+        return set()
+    try:
+        from surf_labels_probe import resolve_labels
+        from protocol_lockup_detector import (
+            VESTING_LABEL_RE,
+            MULTISIG_LABEL_RE,
+            TREASURY_LABEL_RE,
+        )
+    except Exception as e:
+        import sys as _sys
+        print(f"[section_l] arkham lockup probe import failed (non-fatal): {e}",
+              file=_sys.stderr)
+        return set()
+    # v0.9.7 fix (post-FOLKS 2026-06-16): surf wallet-labels-batch docs say
+    # 100-address limit, but empirical test (FOLKS Top 50 ran into exit 4
+    # `INTERNAL_ERROR`) shows surf crashes at ~25 addresses. Chunk into 20
+    # per call so 50 holders = 3 surf calls (still cheap, +1-2 credits each).
+    BATCH = 20
+    labels: dict[str, dict] = {}
+    # v0.9.7 codex Finding 8 (LOW): per-chunk try so a single chunk failure
+    # doesn't discard the labels from chunks that DID succeed. Pre-fix the
+    # whole loop was in one try → chunk 2 failing threw away chunk 1's
+    # vesting hits.
+    n_chunk_errs = 0
+    for i in range(0, len(top_addrs), BATCH):
+        chunk = top_addrs[i:i + BATCH]
+        try:
+            chunk_labels = resolve_labels(chunk) or {}
+            labels.update(chunk_labels)
+        except Exception as e:
+            n_chunk_errs += 1
+            import sys as _sys
+            print(f"[section_l] arkham lockup probe chunk failed (non-fatal, "
+                  f"keeping {len(labels)} labels so far): {e}", file=_sys.stderr)
+    if not labels:
+        return set()
+    extra: set[str] = set()
+    for addr, info in labels.items():
+        if not isinstance(info, dict):
+            continue
+        text_parts = []
+        for k in ("label", "entity_name"):
+            v = info.get(k)
+            if v and isinstance(v, str):
+                text_parts.append(v)
+        label_text = " | ".join(text_parts)
+        if not label_text:
+            continue
+        # ANY of vesting / multisig / treasury → PROJECT_LOCKUP bucket.
+        # The 3 regexes are pre-built in protocol_lockup_detector and
+        # tested cross-token.
+        if (VESTING_LABEL_RE.search(label_text)
+                or MULTISIG_LABEL_RE.search(label_text)
+                or TREASURY_LABEL_RE.search(label_text)):
+            extra.add(_norm_addr(addr))
+    return extra
+
+
 # Closed enum list (was _ROLE_LABELS keys). Used by `for role in _ROLE_LABELS_KEYS`
 # iteration order — kept stable for deterministic output.
 # v0.7.10.3: PROJECT_LOCKUP inserted after DEPLOYER — vesting / multisig /
@@ -193,6 +271,25 @@ def run(
     # receiver Arkham-labeled vesting/multisig/treasury/DEX-infra/CEX-custody
     # gets PROJECT_LOCKUP regardless of dumped_pct.
     lockup_set = {_norm_addr(r["addr"]) for r in receivers if r.get("is_protocol_lockup")}
+
+    # v0.9.7 fix #1 (FOLKS Sablier 漏报 2026-06-16): Top 50 holders 也跑
+    # Arkham label lookup, vesting/multisig/treasury 关键词命中的加进
+    # lockup_set. 旧版 lockup_set 只来自 m6 受方 (deployer 直接下游, 深度
+    # 1), 漏掉所有深度 ≥2 的 vesting 合约 (FOLKS Sablier Lockup 通过
+    # treasury → SablierBatchLockup → Sablier Lockup NFT 三跳深度, 不在
+    # m6 set 里). 后果: Sablier 4.22M tokens (27.7% 流通) 被归类为
+    # "其他 (散户+未分类)", 实际是项目方分发池.
+    #
+    # 成本: 1 surf wallet-labels-batch / 50 addrs ≈ 1-2 credits. 几乎免费.
+    # Failure mode: surf 失败/标签缺失 → 跟旧版 fallback 行为完全一致 (空
+    # set 加进 lockup_set 没影响). 永不退化, 只增量加分.
+    top_holder_addrs = [
+        _norm_addr(h.get("addr") or "") for h in top_holders
+        if h.get("addr")
+    ]
+    arkham_lockup_extra = _arkham_lockup_from_top_holders(top_holder_addrs)
+    if arkham_lockup_extra:
+        lockup_set = lockup_set | arkham_lockup_extra
     # v0.7.13 (issue #1 Bug 1): dumped_pct may be None ("unknown") for a
     # sub-dumper whose backfill failed — guard so it is excluded from each
     # bucket instead of crashing `0 < None < 95`.

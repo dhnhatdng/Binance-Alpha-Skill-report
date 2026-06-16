@@ -1288,12 +1288,57 @@ def build_skeleton(
             }
             _primary_chain = _get_active_chain()
             _cross_chain_results: dict[str, Any] = {}
+            # v0.9.7 fix (FOLKS 9-chain 2026-06-16): gate cross-chain
+            # forensic by LP threshold. FOLKS empirical: 7 non-primary
+            # chains × full mint/throughput scan = +7 min, ALL return 0
+            # because FOLKS only has meaningful activity on BSC + ETH +
+            # Avalanche. Pre-v0.9.7 skill ran forensic on every CG-mapped
+            # chain blindly. Now: skip chains with LP < $10K (no real
+            # activity → no operator to find).
+            _MULTI_CHAIN_MIN_LP_USD = float(
+                os.environ.get("BINANCE_ALPHA_MULTI_CHAIN_MIN_LP_USD", "10000")
+            )
+            _chain_lp_realtime = scope.get("chain_lp_realtime") or {}
             for _cg_platform, _ca_on_chain in (scope.get("coingecko_platforms") or {}).items():
                 _chain_short = _CG_TO_CHAIN.get(_cg_platform)
                 if not _chain_short or _chain_short == _primary_chain:
                     continue
                 if not _ca_on_chain:
                     continue
+                # LP gate: skip chains with KNOWN-low liquidity. Codex
+                # v0.9.7 Finding 5 (HIGH): distinguish "LP probe failed
+                # (unknown)" from "LP genuinely low". A failed surf probe
+                # leaves lp_usd=None — that is NOT evidence the chain is
+                # dead, so we must NOT skip on it (would silently miss an
+                # active chain whose probe flaked). Only skip when LP is
+                # KNOWN and below threshold. Unknown LP → scan anyway
+                # (correctness > speed for the unknown case).
+                _chain_lp_entry = _chain_lp_realtime.get(_chain_short) or {}
+                _lp_usd = _chain_lp_entry.get("lp_usd")
+                _lp_probe_failed = bool(_chain_lp_entry.get("_error")) or (
+                    _chain_lp_entry.get("surf_supported") and _lp_usd is None
+                    and _chain_lp_entry.get("n_dex_pools") is None
+                )
+                if _lp_usd is not None and _lp_usd < _MULTI_CHAIN_MIN_LP_USD:
+                    _cross_chain_results[_chain_short] = {
+                        "ca": _ca_on_chain, "cg_platform": _cg_platform,
+                        "_skipped": (
+                            f"LP ${_lp_usd:.0f} < ${_MULTI_CHAIN_MIN_LP_USD:.0f} threshold "
+                            f"— chain has no meaningful activity to forensic"
+                        ),
+                    }
+                    continue
+                if _lp_usd is None and not _lp_probe_failed:
+                    # LP probe ran cleanly + found 0 pools = genuinely no
+                    # DEX market on this chain → skip (same as low LP).
+                    if (_chain_lp_entry.get("n_dex_pools") or 0) == 0:
+                        _cross_chain_results[_chain_short] = {
+                            "ca": _ca_on_chain, "cg_platform": _cg_platform,
+                            "_skipped": "0 DEX pools on this chain — no market to forensic",
+                        }
+                        continue
+                # Else: lp_usd known >= threshold, OR lp_usd unknown due to
+                # probe failure → scan (don't silently skip an active chain).
                 try:
                     with _chain_lock(_chain_short):
                         if not _sql_supported():
@@ -1302,17 +1347,50 @@ def build_skeleton(
                                 "_skipped": f"surf has no agent.{_chain_short}_transfers table",
                             }
                             continue
-                        _mc_auth = _discover_mint_authorities(
-                            ca=_ca_on_chain, date_floor=_date_floor,
-                            top_n=10, min_pct_supply=0.001,
-                            total_supply=scope.get("total_supply"),
+                        # v0.9.7 codex Finding 4 (MEDIUM): set the SECONDARY
+                        # chain's token decimals before its SQL runs. The
+                        # bridged/mirror deployment may have different decimals
+                        # than the primary (e.g. 18 on BSC, 6 on a bridge
+                        # mint). Without this, the secondary chain's
+                        # mint/throughput thresholds use the primary divisor
+                        # and mis-scale. Save + restore around the scan so the
+                        # primary chain's decimals aren't leaked back.
+                        from chain_router import (
+                            get_token_decimals as _get_tok_dec,
+                            set_token_decimals as _set_tok_dec,
                         )
-                        _mc_ht = _discover_high_throughput_dumpers(
-                            ca=_ca_on_chain, date_floor=_date_floor,
-                            min_throughput=1_000_000.0, max_balance_frac=0.25,
-                            min_n_tx=500, top_n=50,
-                            total_supply=scope.get("total_supply"),
-                        )
+                        from section_a_scope import _fetch_evm_token_decimals
+                        # Capture primary decimals, then do EVERYTHING
+                        # (fetch + set + scan) inside try so the finally
+                        # unconditionally restores — even if the secondary
+                        # decimals RPC or set throws. Pre-bulletproof version
+                        # had fetch/set outside the try; a throw there would
+                        # leak secondary decimals into the rest of the
+                        # pipeline (every later section uses the wrong divisor).
+                        _saved_decimals = _get_tok_dec()
+                        _chain_id_for_rpc = {
+                            "ethereum": "1", "bsc": "56", "polygon": "137",
+                            "base": "8453", "arbitrum": "42161",
+                            "optimism": "10", "avalanche": "43114",
+                        }.get(_chain_short)
+                        try:
+                            _sec_dec = _fetch_evm_token_decimals(
+                                _ca_on_chain, _chain_id_for_rpc,
+                            )
+                            _set_tok_dec(_sec_dec)  # None → fallback 18 internally
+                            _mc_auth = _discover_mint_authorities(
+                                ca=_ca_on_chain, date_floor=_date_floor,
+                                top_n=10, min_pct_supply=0.001,
+                                total_supply=scope.get("total_supply"),
+                            )
+                            _mc_ht = _discover_high_throughput_dumpers(
+                                ca=_ca_on_chain, date_floor=_date_floor,
+                                min_throughput=1_000_000.0, max_balance_frac=0.25,
+                                min_n_tx=500, top_n=50,
+                                total_supply=scope.get("total_supply"),
+                            )
+                        finally:
+                            _set_tok_dec(_saved_decimals)  # restore primary, always
                         # v0.7.24e.2 (A3): multi_chain mint_auth + ht labels
                         # deferred to consolidated batch at end of Round 8.
 
@@ -1908,6 +1986,13 @@ def build_skeleton(
             # render Data Gap so the user knows about the trace incompleteness.
             "step4_skipped_dumpers": rule11.get("step4_skipped_dumpers", []),
             "n_step4_skipped_dumpers": rule11.get("n_step4_skipped_dumpers", 0),
+            # v0.9.7 codex R1 Finding 6 (HIGH): step4 budget-cap truncation.
+            # When recursion_truncated, the verdict is a LOWER BOUND — N
+            # sub-dumpers holding ~X tokens were not recursively expanded.
+            # Surfaced so render Data Gap can disclose the under-count.
+            "recursion_truncated": rule11.get("recursion_truncated", False),
+            "n_sub_dumpers_skipped": rule11.get("n_sub_dumpers_skipped", 0),
+            "n_sub_dumpers_skipped_tokens": rule11.get("n_sub_dumpers_skipped_tokens", 0.0),
         },
 
         # Anomaly waves: pipeline-built from Rule 11 waves_proposal + Section ANOMALY 72h

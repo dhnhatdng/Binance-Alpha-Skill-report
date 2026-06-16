@@ -33,6 +33,7 @@ from chain_router import (  # v0.7.20 / v0.7.21.7 / v0.7.21.8
     dex_trades_table,
     get_active_chain as _chain_get_active,
     sql_supported as _sql_supported,
+    decimals_factor_str,
 )
 
 
@@ -136,8 +137,8 @@ def lp_24h_flow(ca: str, pool_addr: str | None, workdir: Path | None = None) -> 
         "max_rows": 2,
         "sql": (
             f"SELECT "
-            f"sum(if(\"to\" = '{pool_addr}', toFloat64(toDecimal256(amount_raw,0))/1e18, 0)) AS lp_in, "
-            f"sum(if(\"from\" = '{pool_addr}', toFloat64(toDecimal256(amount_raw,0))/1e18, 0)) AS lp_out "
+            f"sum(if(\"to\" = '{pool_addr}', toFloat64(toDecimal256(amount_raw,0))/{decimals_factor_str()}, 0)) AS lp_in, "
+            f"sum(if(\"from\" = '{pool_addr}', toFloat64(toDecimal256(amount_raw,0))/{decimals_factor_str()}, 0)) AS lp_out "
             f"FROM {transfers_table()} "
             f"WHERE contract_address = '{ca if _chain_get_active() == 'solana' else ca.lower()}' "
             f"AND block_time >= now() - INTERVAL 1 DAY "

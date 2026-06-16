@@ -79,6 +79,7 @@ import re
 import subprocess
 import sys
 from chain_router import transfers_table, dex_trades_table  # v0.7.20
+from chain_router import decimals_factor_str  # v0.9.7
 from pathlib import Path
 from push_airdrop_detector import fetch_push_airdrop_recipients  # v0.8.1
 from typing import Any
@@ -147,9 +148,9 @@ def fetch_current_balances(ca: str, wallets: list[str], date_floor: str) -> dict
         return {}
     arr = "[" + ",".join(f"'{w}'" for w in wallets) + "]"
     sql = (
-        "WITH ins AS (SELECT \"to\" AS a, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt "
+        f"WITH ins AS (SELECT \"to\" AS a, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor_str()}) AS amt "
         f"FROM {transfers_table()} WHERE contract_address='{ca.lower()}' AND block_date >= '{date_floor}' GROUP BY a), "
-        "outs AS (SELECT \"from\" AS a, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt "
+        f"outs AS (SELECT \"from\" AS a, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor_str()}) AS amt "
         f"FROM {transfers_table()} WHERE contract_address='{ca.lower()}' AND block_date >= '{date_floor}' GROUP BY a) "
         "SELECT r.a AS a, COALESCE(ins.amt,0) - COALESCE(outs.amt,0) AS bal "
         f"FROM (SELECT arrayJoin({arr}) AS a) r LEFT JOIN ins ON r.a=ins.a LEFT JOIN outs ON r.a=outs.a"
@@ -361,11 +362,11 @@ def fetch_apparatus_to_cex(ca: str, wallets: list[str], from_date: str) -> dict[
     # post-process time (sum of per-dest bucket if dest classified CEX).
     sql = (
         'SELECT "to" AS dest, '
-        'sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS tok, '
+        f'sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor_str()}) AS tok, '
         'sum(if(block_date >= today() - 7, '
-        '       toFloat64(toDecimal256(amount_raw,0))/1e18, 0)) AS tok_7d, '
+        f'       toFloat64(toDecimal256(amount_raw,0))/{decimals_factor_str()}, 0)) AS tok_7d, '
         'sum(if(block_date >= today() - 30, '
-        '       toFloat64(toDecimal256(amount_raw,0))/1e18, 0)) AS tok_30d '
+        f'       toFloat64(toDecimal256(amount_raw,0))/{decimals_factor_str()}, 0)) AS tok_30d '
         f"FROM {transfers_table()} WHERE contract_address='{ca.lower()}' "
         f'AND "from" IN ({in_list}) AND block_date >= \'{from_date}\' '
         "GROUP BY dest ORDER BY tok DESC LIMIT 100"

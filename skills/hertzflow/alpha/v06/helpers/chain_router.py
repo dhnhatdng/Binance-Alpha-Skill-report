@@ -279,6 +279,57 @@ def dex_trades_table() -> str:
     return f"agent.{_active_chain}_dex_trades"
 
 
+# v0.9.7 fix #2 (FOLKS 6-decimal 2026-06-16): module-level token decimals.
+# Pre-v0.9.7 every SQL hardcoded `/1e18` assuming 18-decimal ERC20. FOLKS
+# is 6-decimal (Folks Finance was originally an Algorand project, 6-decimal
+# default carried to its multichain EVM mirrors). Every token-amount field
+# computed by the skill (m6 received, dump_tracker tokens, insider holdings,
+# anomaly amounts) was wrong by `10^(18-decimals)` factor — for FOLKS that
+# is 10^12. Ratios (dumped_pct, % supply) cancelled the error so verdict
+# logic survived, but raw token counts in the report were 1e12 too small.
+#
+# section_a sets this on every CA via the EVM `decimals()` RPC call; if
+# the RPC fails or the chain is Solana (uses SPL mint metadata path), we
+# fall back to the v0.9.6 default 18 so behavior never regresses.
+_token_decimals: int = 18
+
+
+def set_token_decimals(d: int | None) -> None:
+    """Set the active token's `decimals` value. Called by section_a after
+    successful RPC lookup. None / invalid input falls back to 18 (v0.9.6
+    behavior — never regresses for the 99% case)."""
+    global _token_decimals
+    try:
+        d_int = int(d) if d is not None else 18
+    except (TypeError, ValueError):
+        d_int = 18
+    # Bound check: ERC20 spec allows 0-255 but realistic tokens use 6-18.
+    # Reject obvious garbage so downstream SQL doesn't `/1e0` divide.
+    if d_int < 0 or d_int > 30:
+        d_int = 18
+    _token_decimals = d_int
+
+
+def get_token_decimals() -> int:
+    """Return active token decimals (default 18)."""
+    return _token_decimals
+
+
+def decimals_factor() -> float:
+    """Return the divisor for raw amounts. SQL builders should use
+    `decimals_factor_str()` instead — this is for Python-side math."""
+    return 10.0 ** _token_decimals
+
+
+def decimals_factor_str() -> str:
+    """Return SQL-safe scientific notation for the active decimals factor.
+    Defaults to `1e18` (v0.9.6 baseline) — exact string match so SQL plans
+    remain identical for 18-decimal tokens. For FOLKS (6 decimals) returns
+    `1e6`. Used in every SQL template's `{decimals_factor}` placeholder
+    via `.format(decimals_factor=decimals_factor_str())`."""
+    return f"1e{_token_decimals}"
+
+
 @contextmanager
 def chain_lock(chain: int | str) -> Iterator[str]:
     """Temporarily set the active chain, then restore the prior value.

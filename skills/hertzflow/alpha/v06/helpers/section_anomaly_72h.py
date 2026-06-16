@@ -45,9 +45,10 @@ from parallel_surf import run_parallel
 from evidence_graph import EvidenceGraph
 from i18n import t   # v0.6.2 i18n
 from chain_router import transfers_table, dex_trades_table, get_active_chain as _chain_get_active  # v0.7.20 / v0.7.21.7
+from chain_router import decimals_factor_str  # v0.9.7
 
 
-SQL_RECENT_72H = """SELECT block_time, "from" AS sender, "to" AS receiver, toFloat64(toDecimal256(amount_raw,0))/1e18 AS amt, tx_hash FROM {transfers} WHERE contract_address = '{ca}' AND block_date >= today() - 4 AND toDecimal256(amount_raw,0)/1e18 >= {threshold} ORDER BY block_time DESC LIMIT 100"""
+SQL_RECENT_72H = """SELECT block_time, "from" AS sender, "to" AS receiver, toFloat64(toDecimal256(amount_raw,0))/{decimals_factor} AS amt, tx_hash FROM {transfers} WHERE contract_address = '{ca}' AND block_date >= today() - 4 AND toDecimal256(amount_raw,0)/{decimals_factor} >= {threshold} ORDER BY block_time DESC LIMIT 100"""
 
 
 def _ts_to_iso(ts: int | str) -> str:
@@ -98,7 +99,7 @@ def run(
         json.dumps({
             "max_rows": 100,
             # v0.7.21.7: chain-aware case. Solana base58 CAs must NOT be lowercased.
-            "sql": SQL_RECENT_72H.format(ca=(ca if _chain_get_active() == "solana" else ca.lower()), threshold=int(threshold_token_amount), transfers=transfers_table(), dex_trades=dex_trades_table()),
+            "sql": SQL_RECENT_72H.format(ca=(ca if _chain_get_active() == "solana" else ca.lower()), threshold=int(threshold_token_amount), transfers=transfers_table(), dex_trades=dex_trades_table(), decimals_factor=decimals_factor_str()),
         }),
         encoding="utf-8",
     )

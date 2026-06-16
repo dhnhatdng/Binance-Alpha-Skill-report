@@ -70,6 +70,7 @@ if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 
 from chain_router import transfers_table  # noqa: E402
+from chain_router import decimals_factor_str  # v0.9.7
 
 _SURF_MAX_ROWS_CAP = 9000
 _SURF_MAX_LOOKBACK_DAYS = 365
@@ -466,12 +467,12 @@ def _build_balance_sql(*, ca: str, addrs: list[str], date_floor: str) -> str:
     array_list = "[" + ",".join(f"'{a}'" for a in addrs) + "]"
     return (
         "WITH ins AS ("
-        f'SELECT "to" AS a, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt '
+        f'SELECT "to" AS a, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor_str()}) AS amt '
         f"FROM {transfers_table()} "
         f"WHERE contract_address = '{ca}' AND block_date >= '{date_floor}' "
         f'AND "to" IN {addr_in} GROUP BY a'
         "), outs AS ("
-        f'SELECT "from" AS a, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt '
+        f'SELECT "from" AS a, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor_str()}) AS amt '
         f"FROM {transfers_table()} "
         f"WHERE contract_address = '{ca}' AND block_date >= '{date_floor}' "
         f'AND "from" IN {addr_in} GROUP BY a'
@@ -497,7 +498,7 @@ def _build_chunk_sql(
     # concentration L5 filter.
     return (
         f'SELECT "from" AS from_addr, "to" AS to_addr, '
-        f"sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt, "
+        f"sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor_str()}) AS amt, "
         f"count() AS n_tx, "
         f"min(block_time) AS min_block_time, "
         f"max(block_time) AS max_block_time "

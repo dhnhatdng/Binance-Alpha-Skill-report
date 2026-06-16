@@ -64,6 +64,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 from chain_router import transfers_table  # v0.7.20
+from chain_router import decimals_factor_str  # v0.9.7
 
 _HEX_ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
@@ -158,14 +159,14 @@ def fetch_push_airdrop_recipients(
     if total_supply and total_supply > 0:
         mean_cap_raw_supply = (total_supply * max_mean_per_recipient_pct_supply / 100.0)
     cap_clause = (
-        f' AND avg(toFloat64(toDecimal256(amount_raw,0))/1e18) <= {mean_cap_raw_supply}'
+        f' AND avg(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor_str()}) <= {mean_cap_raw_supply}'
         if mean_cap_raw_supply is not None else ''
     )
     sql = (
         f'WITH flagged_tx AS ('
         f' SELECT tx_hash,'
         f' count(DISTINCT "to") AS n_to,'
-        f' avg(toFloat64(toDecimal256(amount_raw,0))/1e18) AS mean_amt'
+        f' avg(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor_str()}) AS mean_amt'
         f' FROM {transfers}'
         f" WHERE contract_address = '{ca}'"
         f' AND "from" = \'{deployer}\''
@@ -175,7 +176,7 @@ def fetch_push_airdrop_recipients(
         f'{cap_clause}'
         f') '
         f'SELECT "to" AS recipient, tx_hash,'
-        f' sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amount'
+        f' sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor_str()}) AS amount'
         f' FROM {transfers}'
         f" WHERE contract_address = '{ca}'"
         f' AND "from" = \'{deployer}\''

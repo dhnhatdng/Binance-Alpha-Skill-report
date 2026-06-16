@@ -5,4 +5,4 @@ update_check.py (compares against latest GitHub tag) read from here, so
 release bumps only touch one file.
 """
 
-__version__ = "0.9.6"
+__version__ = "0.9.7"

@@ -1624,6 +1624,21 @@ _统计 (m6 谱系全集 **{{ _m6_total_lineage }}** 个): {{ lineage.m6.n_quiet
 _Action: 重跑 (surf 一过性 throttle 通常自愈) — 或 `BINANCE_ALPHA_STEP4_WORKERS=3` 降并发后重跑._
 {% endif %}
 
+{# v0.9.7 codex R1 Finding 6 (HIGH): step4 budget-cap truncation. When
+   the dispersal tree is wider than MAX_PROMOTED_SUBDUMPERS (default 12),
+   the largest N sub-dumpers are expanded + the rest skipped. The verdict
+   is then a LOWER BOUND — disclose the skipped count + aggregate token
+   size so the reader knows the operator tree is under-counted (NOT a
+   surf failure — an intentional budget cap; rerun with
+   BINANCE_ALPHA_STEP4_MAX_DUMPERS=40 for full depth). #}
+{%- set _n_cap_skipped = (lineage.get('n_sub_dumpers_skipped', 0) if lineage is mapping else 0) or 0 -%}
+{%- set _cap_skipped_tokens = (lineage.get('n_sub_dumpers_skipped_tokens', 0) if lineage is mapping else 0) or 0 -%}
+{% if _n_cap_skipped > 0 %}
+
+**⚠️ Step4 预算上限截断 (Data Gap — 结论是下界)**: 分发树宽度超过 step4 递归预算 (默认 12), 已展开最大的若干个 sub-dumper, **另有 {{ _n_cap_skipped }} 个 sub-dumper (累计约 {{ "{:,.0f}".format(_cap_skipped_tokens) }} tokens) 未递归展开**. 当前 verdict 基于已展开部分, 是**下界** — 真实操盘网络可能更深。
+_Action: 这是预算截断不是 surf 失败. 需要完整深度跑 `BINANCE_ALPHA_STEP4_MAX_DUMPERS=40` 重跑._
+{% endif %}
+
 </details>
 
 {# v0.8.4.9: cross_sym 段整段删除. 用户 review (2026-06-11): 抓到的多是

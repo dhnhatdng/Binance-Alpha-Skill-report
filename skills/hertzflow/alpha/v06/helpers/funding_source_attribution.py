@@ -35,6 +35,7 @@ from chain_router import (
     is_valid_addr as _chain_is_valid_addr,
     transfers_table,
     dex_trades_table,
+    decimals_factor_str,
 )
 from window_chunker import (  # v0.9.4
     chunked_dates,
@@ -179,7 +180,7 @@ def _build_source_sql(
         f"  WHEN \"from\" IN {dex_in} THEN 'dex_buy' "
         f"  WHEN \"from\" IN {cex_in} THEN 'cex_withdraw' "
         "  ELSE 'p2p' END AS source, "
-        "sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt, "
+        f"sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor_str()}) AS amt, "
         "count() AS n_tx "
         f"FROM {transfers_table()} "
         f"WHERE contract_address = '{ca_lc}' "
@@ -392,11 +393,11 @@ def attribute_funding(
 # transfers, not P2P), so the v0.7.23.x mining_fed_outflows path misses
 # them. Specifically: 0x6aa22cb8 (H bridge contract) minted 132.5B H over
 # 30d and self-DEX-dumped 19.8B (≈ $3M) — never surfaced before.
-_SQL_FIND_MINT_AUTHORITIES = """SELECT "to" AS authority, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS total_minted, count() AS n_mints FROM {transfers} WHERE contract_address = '{ca_lc}' AND "from" = '0x0000000000000000000000000000000000000000' AND block_date >= '{date_floor}' GROUP BY authority ORDER BY total_minted DESC LIMIT {top_n}"""
+_SQL_FIND_MINT_AUTHORITIES = """SELECT "to" AS authority, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS total_minted, count() AS n_mints FROM {transfers} WHERE contract_address = '{ca_lc}' AND "from" = '0x0000000000000000000000000000000000000000' AND block_date >= '{date_floor}' GROUP BY authority ORDER BY total_minted DESC LIMIT {top_n}"""
 
 _SQL_MINING_FED_DEX_SELL = """SELECT tx_from AS addr, count() AS n_swaps, sum(token_sold_amount) AS tokens_sold, sum(if(amount_usd > 0, amount_usd, 0)) AS sold_usd FROM {dex_trades} WHERE token_sold_address = '{ca_lc}' AND tx_from IN {in_list} AND block_date >= '{date_floor}' GROUP BY addr ORDER BY tokens_sold DESC"""
 
-_SQL_MINING_FED_OUTFLOWS = """SELECT "from" AS src, "to" AS dest, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt, count() AS n_tx FROM {transfers} WHERE contract_address = '{ca_lc}' AND "from" IN {in_list} AND "to" != '0x0000000000000000000000000000000000000000' AND "to" != '0x000000000000000000000000000000000000dead' AND block_date >= '{date_floor}' GROUP BY src, dest ORDER BY amt DESC LIMIT 200"""
+_SQL_MINING_FED_OUTFLOWS = """SELECT "from" AS src, "to" AS dest, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS amt, count() AS n_tx FROM {transfers} WHERE contract_address = '{ca_lc}' AND "from" IN {in_list} AND "to" != '0x0000000000000000000000000000000000000000' AND "to" != '0x000000000000000000000000000000000000dead' AND block_date >= '{date_floor}' GROUP BY src, dest ORDER BY amt DESC LIMIT 200"""
 
 # v0.7.24e.1: merged outflows + balances in 1 UNION ALL SQL. Both query
 # the same transfers partition (contract + block_date filter) so
@@ -404,12 +405,12 @@ _SQL_MINING_FED_OUTFLOWS = """SELECT "from" AS src, "to" AS dest, sum(toFloat64(
 # Saves 1 surf round-trip + 1 credit per query_mining_fed_outflows call
 # (and v0.7.24a mint_authority_dumps reuses same helper → 2 saves total
 # per pipeline).
-_SQL_MINING_FED_TRANSFERS_MERGED = """WITH ins AS (SELECT "to" AS a, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date >= '{date_floor}' AND "to" IN {in_list} GROUP BY a), outs AS (SELECT "from" AS a, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date >= '{date_floor}' AND "from" IN {in_list} GROUP BY a) SELECT 'balance' AS rt, r.a AS src, '' AS dest, COALESCE(ins.amt, 0) AS amt, 0 AS n_tx, COALESCE(ins.amt, 0) - COALESCE(outs.amt, 0) AS balance, COALESCE(outs.amt, 0) AS total_out FROM (SELECT arrayJoin({array_list}) AS a) r LEFT JOIN ins ON r.a = ins.a LEFT JOIN outs ON r.a = outs.a UNION ALL SELECT 'outflow' AS rt, "from" AS src, "to" AS dest, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt, count() AS n_tx, 0 AS balance, 0 AS total_out FROM {transfers} WHERE contract_address = '{ca_lc}' AND "from" IN {in_list} AND "to" != '0x0000000000000000000000000000000000000000' AND "to" != '0x000000000000000000000000000000000000dead' AND block_date >= '{date_floor}' GROUP BY src, dest"""
+_SQL_MINING_FED_TRANSFERS_MERGED = """WITH ins AS (SELECT "to" AS a, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS amt FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date >= '{date_floor}' AND "to" IN {in_list} GROUP BY a), outs AS (SELECT "from" AS a, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS amt FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date >= '{date_floor}' AND "from" IN {in_list} GROUP BY a) SELECT 'balance' AS rt, r.a AS src, '' AS dest, COALESCE(ins.amt, 0) AS amt, 0 AS n_tx, COALESCE(ins.amt, 0) - COALESCE(outs.amt, 0) AS balance, COALESCE(outs.amt, 0) AS total_out FROM (SELECT arrayJoin({array_list}) AS a) r LEFT JOIN ins ON r.a = ins.a LEFT JOIN outs ON r.a = outs.a UNION ALL SELECT 'outflow' AS rt, "from" AS src, "to" AS dest, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS amt, count() AS n_tx, 0 AS balance, 0 AS total_out FROM {transfers} WHERE contract_address = '{ca_lc}' AND "from" IN {in_list} AND "to" != '0x0000000000000000000000000000000000000000' AND "to" != '0x000000000000000000000000000000000000dead' AND block_date >= '{date_floor}' GROUP BY src, dest"""
 
 # v0.7.23.4: per-addr current balance = sum(in) − sum(out) over the 365d
 # window. Mining-fed wallets fully unwound (balance ≈ 0 after dump) read as
 # "已 dump 完毕" stock; wallets still holding read as "还在累积/未完全出货".
-_SQL_MINING_FED_BALANCES = """WITH ins AS (SELECT "to" AS a, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date >= '{date_floor}' AND "to" IN {in_list} GROUP BY a), outs AS (SELECT "from" AS a, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date >= '{date_floor}' AND "from" IN {in_list} GROUP BY a) SELECT r.a AS addr, COALESCE(ins.amt, 0) AS total_in, COALESCE(outs.amt, 0) AS total_out, COALESCE(ins.amt, 0) - COALESCE(outs.amt, 0) AS balance FROM (SELECT arrayJoin({array_list}) AS a) r LEFT JOIN ins ON r.a = ins.a LEFT JOIN outs ON r.a = outs.a"""
+_SQL_MINING_FED_BALANCES = """WITH ins AS (SELECT "to" AS a, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS amt FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date >= '{date_floor}' AND "to" IN {in_list} GROUP BY a), outs AS (SELECT "from" AS a, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS amt FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date >= '{date_floor}' AND "from" IN {in_list} GROUP BY a) SELECT r.a AS addr, COALESCE(ins.amt, 0) AS total_in, COALESCE(outs.amt, 0) AS total_out, COALESCE(ins.amt, 0) - COALESCE(outs.amt, 0) AS balance FROM (SELECT arrayJoin({array_list}) AS a) r LEFT JOIN ins ON r.a = ins.a LEFT JOIN outs ON r.a = outs.a"""
 
 
 def query_mining_fed_outflows(
@@ -475,12 +476,12 @@ def query_mining_fed_outflows(
     in_list = "(" + ",".join(f"'{a}'" for a in addrs) + ")"
     array_list = "[" + ",".join(f"'{a}'" for a in addrs) + "]"
     sql_sell = _SQL_MINING_FED_DEX_SELL.format(
-        dex_trades=dex_trades_table(), ca_lc=ca,
+        dex_trades=dex_trades_table(), decimals_factor=decimals_factor_str(), ca_lc=ca,
         in_list=in_list, date_floor=date_floor_clamped,
     )
     # v0.7.24e.1: merged outflows + balances into 1 SQL (UNION ALL)
     sql_transfers_merged = _SQL_MINING_FED_TRANSFERS_MERGED.format(
-        transfers=transfers_table(), ca_lc=ca,
+        transfers=transfers_table(), decimals_factor=decimals_factor_str(), ca_lc=ca,
         in_list=in_list, array_list=array_list,
         date_floor=date_floor_clamped,
     )
@@ -692,7 +693,7 @@ def discover_mint_authorities(
     exclude_set = {a.lower() for a in _clean_addrs(exclude_addrs)}
 
     sql = _SQL_FIND_MINT_AUTHORITIES.format(
-        transfers=transfers_table(), ca_lc=ca,
+        transfers=transfers_table(), decimals_factor=decimals_factor_str(), ca_lc=ca,
         date_floor=date_floor_clamped, top_n=top_n,
     )
 
@@ -770,7 +771,7 @@ def discover_mint_authorities(
 #    via p2p from authorities, not directly from 0x0)
 #  - mint_authority: they're receivers, not 0x0-issuers
 #  - top_holders: balance ≈ 0 keeps them off top-30
-_SQL_HIGH_THROUGHPUT = """WITH ins AS (SELECT "to" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt_in, count() AS n_in FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date >= '{date_floor}' GROUP BY addr), outs AS (SELECT "from" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt_out, count() AS n_out FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date >= '{date_floor}' GROUP BY addr) SELECT ins.addr, ins.amt_in AS total_in, COALESCE(outs.amt_out, 0) AS total_out, ins.amt_in - COALESCE(outs.amt_out, 0) AS balance, ins.n_in + COALESCE(outs.n_out, 0) AS n_tx FROM ins LEFT JOIN outs ON ins.addr = outs.addr WHERE ins.amt_in >= {min_throughput} AND ins.amt_in <= {max_throughput} AND abs(ins.amt_in - COALESCE(outs.amt_out, 0)) < ins.amt_in * {max_balance_frac} AND ins.n_in + COALESCE(outs.n_out, 0) >= {min_n_tx} AND ins.addr != '0x0000000000000000000000000000000000000000' AND ins.addr != '0x000000000000000000000000000000000000dead' ORDER BY ins.amt_in DESC LIMIT {top_n}"""
+_SQL_HIGH_THROUGHPUT = """WITH ins AS (SELECT "to" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS amt_in, count() AS n_in FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date >= '{date_floor}' GROUP BY addr), outs AS (SELECT "from" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS amt_out, count() AS n_out FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date >= '{date_floor}' GROUP BY addr) SELECT ins.addr, ins.amt_in AS total_in, COALESCE(outs.amt_out, 0) AS total_out, ins.amt_in - COALESCE(outs.amt_out, 0) AS balance, ins.n_in + COALESCE(outs.n_out, 0) AS n_tx FROM ins LEFT JOIN outs ON ins.addr = outs.addr WHERE ins.amt_in >= {min_throughput} AND ins.amt_in <= {max_throughput} AND abs(ins.amt_in - COALESCE(outs.amt_out, 0)) < ins.amt_in * {max_balance_frac} AND ins.n_in + COALESCE(outs.n_out, 0) >= {min_n_tx} AND ins.addr != '0x0000000000000000000000000000000000000000' AND ins.addr != '0x000000000000000000000000000000000000dead' ORDER BY ins.amt_in DESC LIMIT {top_n}"""
 
 # v0.9.4 + codex M41 fixes: chunkable variant. Per-chunk SQL uses BETWEEN
 # (partition pruning) so each chunk only scans ~30d of bsc_transfers. The
@@ -796,7 +797,7 @@ _SQL_HIGH_THROUGHPUT = """WITH ins AS (SELECT "to" AS addr, sum(toFloat64(toDeci
 # and fails loud if exactly chunk_top_n+1 rows returned (Codex Fix 2:
 # truncation detection — capped chunk = incomplete merge input, must NOT
 # emit clean empty findings).
-_SQL_HIGH_THROUGHPUT_CHUNK = """WITH ins AS (SELECT "to" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt_in, count() AS n_in FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}' GROUP BY addr), outs AS (SELECT "from" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt_out, count() AS n_out FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}' GROUP BY addr) SELECT ins.addr AS addr, ins.amt_in AS total_in, COALESCE(outs.amt_out, 0) AS total_out, ins.n_in AS n_in, COALESCE(outs.n_out, 0) AS n_out FROM ins LEFT JOIN outs ON ins.addr = outs.addr WHERE ins.amt_in >= {chunk_min_in} AND ins.amt_in <= {max_throughput} AND ins.addr != '0x0000000000000000000000000000000000000000' AND ins.addr != '0x000000000000000000000000000000000000dead' ORDER BY ins.amt_in DESC LIMIT {chunk_top_n_plus_1}"""
+_SQL_HIGH_THROUGHPUT_CHUNK = """WITH ins AS (SELECT "to" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS amt_in, count() AS n_in FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}' GROUP BY addr), outs AS (SELECT "from" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS amt_out, count() AS n_out FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}' GROUP BY addr) SELECT ins.addr AS addr, ins.amt_in AS total_in, COALESCE(outs.amt_out, 0) AS total_out, ins.n_in AS n_in, COALESCE(outs.n_out, 0) AS n_out FROM ins LEFT JOIN outs ON ins.addr = outs.addr WHERE ins.amt_in >= {chunk_min_in} AND ins.amt_in <= {max_throughput} AND ins.addr != '0x0000000000000000000000000000000000000000' AND ins.addr != '0x000000000000000000000000000000000000dead' ORDER BY ins.amt_in DESC LIMIT {chunk_top_n_plus_1}"""
 
 
 def discover_high_throughput_dumpers(
@@ -901,7 +902,7 @@ def discover_high_throughput_dumpers(
             chunk_floor=chunk_floor, chunk_ceiling=chunk_ceiling,
             chunk_min_in=chunk_min_in, max_throughput=max_throughput,
             chunk_top_n_plus_1=chunk_top_n + 1,
-        )
+         decimals_factor=decimals_factor_str())
         return _run_chunk_via_surf(sql, max_rows=chunk_top_n + 10, base_timeout=40)
 
     chunk_results = parallel_run_chunked(_sql_fn, chunks)
@@ -1011,7 +1012,7 @@ def discover_high_throughput_dumpers(
 # Two-phase SQL: (1) find hub candidates by fan-out signature, (2) per-hub
 # senders + recipients. Python label filter narrows to true CEX-origin
 # fan-out.
-_SQL_FANOUT_HUB_CANDIDATES = """WITH recipient_amounts AS (SELECT "from" AS hub, "to" AS recipient, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS rec_amt FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date >= '{date_floor}' AND "to" != '0x0000000000000000000000000000000000000000' AND "to" != '0x000000000000000000000000000000000000dead' GROUP BY hub, recipient HAVING rec_amt >= {min_per_recipient}) SELECT hub, count() AS n_recipients, sum(rec_amt) AS total_out, min(rec_amt) AS min_per, avg(rec_amt) AS avg_per FROM recipient_amounts GROUP BY hub HAVING n_recipients BETWEEN {min_recipients} AND {max_recipients} AND total_out >= {min_total_out} ORDER BY total_out DESC LIMIT {top_n}"""
+_SQL_FANOUT_HUB_CANDIDATES = """WITH recipient_amounts AS (SELECT "from" AS hub, "to" AS recipient, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS rec_amt FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date >= '{date_floor}' AND "to" != '0x0000000000000000000000000000000000000000' AND "to" != '0x000000000000000000000000000000000000dead' GROUP BY hub, recipient HAVING rec_amt >= {min_per_recipient}) SELECT hub, count() AS n_recipients, sum(rec_amt) AS total_out, min(rec_amt) AS min_per, avg(rec_amt) AS avg_per FROM recipient_amounts GROUP BY hub HAVING n_recipients BETWEEN {min_recipients} AND {max_recipients} AND total_out >= {min_total_out} ORDER BY total_out DESC LIMIT {top_n}"""
 
 # v0.9.4 + codex M41 fixes: chunkable variant. Per-chunk SQL outputs raw
 # (hub, recipient, rec_amt) pairs — the outer GROUP BY hub + hub-level
@@ -1027,7 +1028,7 @@ _SQL_FANOUT_HUB_CANDIDATES = """WITH recipient_amounts AS (SELECT "from" AS hub,
 # detected). Without truncation detect, a capped chunk silently feeds
 # incomplete data to the hub merge, where junk pairs can mask a real
 # operator hub.
-_SQL_FANOUT_HUB_CANDIDATES_CHUNK = """SELECT "from" AS hub, "to" AS recipient, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS rec_amt FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}' AND "to" != '0x0000000000000000000000000000000000000000' AND "to" != '0x000000000000000000000000000000000000dead' GROUP BY hub, recipient HAVING rec_amt >= {chunk_min_rec_amt} ORDER BY rec_amt DESC LIMIT {chunk_top_pairs_plus_1}"""
+_SQL_FANOUT_HUB_CANDIDATES_CHUNK = """SELECT "from" AS hub, "to" AS recipient, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS rec_amt FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}' AND "to" != '0x0000000000000000000000000000000000000000' AND "to" != '0x000000000000000000000000000000000000dead' GROUP BY hub, recipient HAVING rec_amt >= {chunk_min_rec_amt} ORDER BY rec_amt DESC LIMIT {chunk_top_pairs_plus_1}"""
 
 # v0.7.24e.1: merge senders + recipients into 1 UNION ALL SQL.
 # Both subqueries use IN {hub_in_list} on the same transfers table /
@@ -1040,8 +1041,8 @@ _SQL_FANOUT_HUB_CANDIDATES_CHUNK = """SELECT "from" AS hub, "to" AS recipient, s
 # senders could even be dropped). Split into two queries with explicit
 # ORDER BY amt DESC + sentinel rows so the caller can detect truncation
 # and fail-loud rather than emit a stale net metric.
-_SQL_FANOUT_HUB_SENDERS = """SELECT "to" AS hub, "from" AS counterparty, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt, count() AS n_tx, min(block_time) AS first_tx FROM {transfers} WHERE contract_address = '{ca_lc}' AND "to" IN {hub_in_list} AND block_date >= '{date_floor}' GROUP BY hub, counterparty ORDER BY amt DESC"""
-_SQL_FANOUT_HUB_RECIPIENTS = """SELECT "from" AS hub, "to" AS counterparty, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt, count() AS n_tx, min(block_time) AS first_tx FROM {transfers} WHERE contract_address = '{ca_lc}' AND "from" IN {hub_in_list} AND block_date >= '{date_floor}' AND "to" != '0x0000000000000000000000000000000000000000' AND "to" != '0x000000000000000000000000000000000000dead' GROUP BY hub, counterparty ORDER BY amt DESC"""
+_SQL_FANOUT_HUB_SENDERS = """SELECT "to" AS hub, "from" AS counterparty, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS amt, count() AS n_tx, min(block_time) AS first_tx FROM {transfers} WHERE contract_address = '{ca_lc}' AND "to" IN {hub_in_list} AND block_date >= '{date_floor}' GROUP BY hub, counterparty ORDER BY amt DESC"""
+_SQL_FANOUT_HUB_RECIPIENTS = """SELECT "from" AS hub, "to" AS counterparty, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS amt, count() AS n_tx, min(block_time) AS first_tx FROM {transfers} WHERE contract_address = '{ca_lc}' AND "from" IN {hub_in_list} AND block_date >= '{date_floor}' AND "to" != '0x0000000000000000000000000000000000000000' AND "to" != '0x000000000000000000000000000000000000dead' GROUP BY hub, counterparty ORDER BY amt DESC"""
 
 
 def discover_cex_fanout_hubs(
@@ -1124,7 +1125,7 @@ def discover_cex_fanout_hubs(
             chunk_floor=chunk_floor, chunk_ceiling=chunk_ceiling,
             chunk_min_rec_amt=chunk_min_rec_amt,
             chunk_top_pairs_plus_1=chunk_top_pairs + 1,
-        )
+         decimals_factor=decimals_factor_str())
         return _run_chunk_via_surf(sql, max_rows=chunk_top_pairs + 10, base_timeout=40)
 
     chunk_results = parallel_run_chunked(_sql_fn, chunks)
@@ -1234,11 +1235,11 @@ def discover_cex_fanout_hubs(
     # 直接拉满 surf 10K cap (9000), 不再 multiply by N_hubs.
     SURF_MAX_ROWS_CAP = 9000      # < surf 10K hard limit, 留 1K headroom
     sql_senders = _SQL_FANOUT_HUB_SENDERS.format(
-        transfers=transfers_table(), ca_lc=ca,
+        transfers=transfers_table(), decimals_factor=decimals_factor_str(), ca_lc=ca,
         hub_in_list=hub_in_list, date_floor=date_floor_clamped,
     )
     sql_recipients = _SQL_FANOUT_HUB_RECIPIENTS.format(
-        transfers=transfers_table(), ca_lc=ca,
+        transfers=transfers_table(), decimals_factor=decimals_factor_str(), ca_lc=ca,
         hub_in_list=hub_in_list, date_floor=date_floor_clamped,
     )
     senders_max_rows = SURF_MAX_ROWS_CAP
@@ -1334,7 +1335,7 @@ def discover_cex_fanout_hubs(
         for hub_addr in hub_addrs:
             sql_per_hub = (
                 f"SELECT '{hub_addr}' AS hub, \"to\" AS counterparty, "
-                f"sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt, "
+                f"sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor_str()}) AS amt, "
                 f"count() AS n_tx, min(block_time) AS first_tx "
                 f"FROM {transfers_table()} "
                 f"WHERE contract_address = '{ca}' AND \"from\" = '{hub_addr}' "

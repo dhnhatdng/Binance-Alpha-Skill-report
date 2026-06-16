@@ -103,7 +103,7 @@ MINT_LOOKBACK_DAYS = 730
 # Tie-break (codex HIGH #2): `ORDER BY amt DESC` alone is non-deterministic when
 # two recipients minted equal cumulative amounts. Add first_mint_ts ASC (earliest
 # minter wins) then deployer ASC so the de-facto deployer is stable run-to-run.
-SQL_FIND_MINT = """SELECT "to" AS deployer, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt, min(block_time) AS first_mint_ts, count() AS n_mints FROM {transfers} WHERE contract_address = '{ca}' AND "from" = '0x0000000000000000000000000000000000000000' AND block_date >= '{date_floor}' GROUP BY deployer ORDER BY amt DESC, first_mint_ts ASC, deployer ASC LIMIT 20"""
+SQL_FIND_MINT = """SELECT "to" AS deployer, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS amt, min(block_time) AS first_mint_ts, count() AS n_mints FROM {transfers} WHERE contract_address = '{ca}' AND "from" = '0x0000000000000000000000000000000000000000' AND block_date >= '{date_floor}' GROUP BY deployer ORDER BY amt DESC, first_mint_ts ASC, deployer ASC LIMIT 20"""
 
 # v0.7.23 step1_mint chunker: same selectivity as SQL_FIND_MINT but
 # bounded by BETWEEN so each chunk fits inside surf's 30s budget. Long
@@ -111,32 +111,32 @@ SQL_FIND_MINT = """SELECT "to" AS deployer, sum(toFloat64(toDecimal256(amount_ra
 # on busy partitions even though 0x0 mint is highly selective. SUM /
 # MIN / COUNT all distribute over chunks so Python-side merge is
 # mathematically equivalent to the single-window form.
-SQL_FIND_MINT_CHUNK = """SELECT "to" AS deployer, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt, min(block_time) AS first_mint_ts, count() AS n_mints FROM {transfers} WHERE contract_address = '{ca}' AND "from" = '0x0000000000000000000000000000000000000000' AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}' GROUP BY deployer ORDER BY amt DESC, first_mint_ts ASC, deployer ASC LIMIT 100"""
+SQL_FIND_MINT_CHUNK = """SELECT "to" AS deployer, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS amt, min(block_time) AS first_mint_ts, count() AS n_mints FROM {transfers} WHERE contract_address = '{ca}' AND "from" = '0x0000000000000000000000000000000000000000' AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}' GROUP BY deployer ORDER BY amt DESC, first_mint_ts ASC, deployer ASC LIMIT 100"""
 
 # v0.7.13: deployer-independent top holders by net balance. Used by the
 # graceful no-anchor path (no 0x0 mint found in MINT_LOOKBACK_DAYS) so rule_11
 # still emits a distribution snapshot instead of hard-erroring. ins/outs
 # CTE-join form, NOT UNION ALL (which OOM'd surf on large-transfer tokens —
 # v0.7.7.1 finding).
-SQL_TOP_HOLDERS = """WITH ins AS (SELECT "to" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt FROM {transfers} WHERE contract_address = '{ca}' AND block_date >= '{date_floor}' GROUP BY addr), outs AS (SELECT "from" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt FROM {transfers} WHERE contract_address = '{ca}' AND block_date >= '{date_floor}' GROUP BY addr) SELECT ins.addr AS addr, ins.amt AS total_in, COALESCE(outs.amt, 0) AS total_out, ins.amt - COALESCE(outs.amt, 0) AS balance FROM ins LEFT JOIN outs ON ins.addr = outs.addr WHERE ins.addr NOT IN ('0x0000000000000000000000000000000000000000', '0x000000000000000000000000000000000000dead') ORDER BY balance DESC LIMIT 30"""
+SQL_TOP_HOLDERS = """WITH ins AS (SELECT "to" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS amt FROM {transfers} WHERE contract_address = '{ca}' AND block_date >= '{date_floor}' GROUP BY addr), outs AS (SELECT "from" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS amt FROM {transfers} WHERE contract_address = '{ca}' AND block_date >= '{date_floor}' GROUP BY addr) SELECT ins.addr AS addr, ins.amt AS total_in, COALESCE(outs.amt, 0) AS total_out, ins.amt - COALESCE(outs.amt, 0) AS balance FROM ins LEFT JOIN outs ON ins.addr = outs.addr WHERE ins.addr NOT IN ('0x0000000000000000000000000000000000000000', '0x000000000000000000000000000000000000dead') ORDER BY balance DESC LIMIT 30"""
 
 # v0.7.23: chunkable variants for sliding-window aggregation. The Python-side
 # merge_chunked_rows combines per-chunk groupings back into a single
 # group-by because SUM is distributive over the chunk partition. Bare
 # `block_date >= floor` form (above) kept as the no-chunk single-shot
 # version for newer tokens where one bucket fits inside surf's 30s budget.
-SQL_TOP_HOLDERS_CHUNK = """SELECT addr, sum(amt_in) AS total_in, sum(amt_out) AS total_out FROM (SELECT "to" AS addr, toFloat64(toDecimal256(amount_raw,0))/1e18 AS amt_in, toFloat64(0) AS amt_out FROM {transfers} WHERE contract_address = '{ca}' AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}' UNION ALL SELECT "from" AS addr, toFloat64(0) AS amt_in, toFloat64(toDecimal256(amount_raw,0))/1e18 AS amt_out FROM {transfers} WHERE contract_address = '{ca}' AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}') GROUP BY addr"""
+SQL_TOP_HOLDERS_CHUNK = """SELECT addr, sum(amt_in) AS total_in, sum(amt_out) AS total_out FROM (SELECT "to" AS addr, toFloat64(toDecimal256(amount_raw,0))/{decimals_factor} AS amt_in, toFloat64(0) AS amt_out FROM {transfers} WHERE contract_address = '{ca}' AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}' UNION ALL SELECT "from" AS addr, toFloat64(0) AS amt_in, toFloat64(toDecimal256(amount_raw,0))/{decimals_factor} AS amt_out FROM {transfers} WHERE contract_address = '{ca}' AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}') GROUP BY addr"""
 
-SQL_DEPLOYER_OUTFLOWS = """SELECT block_time, "to" AS receiver, toFloat64(toDecimal256(amount_raw,0))/1e18 AS amt FROM {transfers} WHERE contract_address = '{ca}' AND "from" = '{deployer}' AND block_date BETWEEN '{date_floor}' AND '{alpha_listing_date}' ORDER BY block_time LIMIT 100"""
+SQL_DEPLOYER_OUTFLOWS = """SELECT block_time, "to" AS receiver, toFloat64(toDecimal256(amount_raw,0))/{decimals_factor} AS amt FROM {transfers} WHERE contract_address = '{ca}' AND "from" = '{deployer}' AND block_date BETWEEN '{date_floor}' AND '{alpha_listing_date}' ORDER BY block_time LIMIT 100"""
 
-SQL_RECEIVER_BALANCES = """WITH ins AS (SELECT "to" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt FROM {transfers} WHERE contract_address = '{ca}' AND block_date >= '{date_floor}' GROUP BY addr), outs AS (SELECT "from" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS amt FROM {transfers} WHERE contract_address = '{ca}' AND block_date >= '{date_floor}' GROUP BY addr) SELECT r.addr AS addr, COALESCE(ins.amt, 0) AS total_in, COALESCE(outs.amt, 0) AS total_out, COALESCE(ins.amt, 0) - COALESCE(outs.amt, 0) AS balance FROM (SELECT arrayJoin({receiver_array}) AS addr) r LEFT JOIN ins ON r.addr = ins.addr LEFT JOIN outs ON r.addr = outs.addr ORDER BY balance DESC"""
+SQL_RECEIVER_BALANCES = """WITH ins AS (SELECT "to" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS amt FROM {transfers} WHERE contract_address = '{ca}' AND block_date >= '{date_floor}' GROUP BY addr), outs AS (SELECT "from" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS amt FROM {transfers} WHERE contract_address = '{ca}' AND block_date >= '{date_floor}' GROUP BY addr) SELECT r.addr AS addr, COALESCE(ins.amt, 0) AS total_in, COALESCE(outs.amt, 0) AS total_out, COALESCE(ins.amt, 0) - COALESCE(outs.amt, 0) AS balance FROM (SELECT arrayJoin({receiver_array}) AS addr) r LEFT JOIN ins ON r.addr = ins.addr LEFT JOIN outs ON r.addr = outs.addr ORDER BY balance DESC"""
 
 # v0.7.23: chunkable variant for receiver balances. Same UNION ALL trick
 # as SQL_TOP_HOLDERS_CHUNK but with an extra IN filter on the receiver
 # array so we only scan rows touching m6 receivers (much smaller).
-SQL_RECEIVER_BALANCES_CHUNK = """SELECT addr, sum(amt_in) AS total_in, sum(amt_out) AS total_out FROM (SELECT "to" AS addr, toFloat64(toDecimal256(amount_raw,0))/1e18 AS amt_in, toFloat64(0) AS amt_out FROM {transfers} WHERE contract_address = '{ca}' AND "to" IN ({receiver_in_list}) AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}' UNION ALL SELECT "from" AS addr, toFloat64(0) AS amt_in, toFloat64(toDecimal256(amount_raw,0))/1e18 AS amt_out FROM {transfers} WHERE contract_address = '{ca}' AND "from" IN ({receiver_in_list}) AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}') GROUP BY addr"""
+SQL_RECEIVER_BALANCES_CHUNK = """SELECT addr, sum(amt_in) AS total_in, sum(amt_out) AS total_out FROM (SELECT "to" AS addr, toFloat64(toDecimal256(amount_raw,0))/{decimals_factor} AS amt_in, toFloat64(0) AS amt_out FROM {transfers} WHERE contract_address = '{ca}' AND "to" IN ({receiver_in_list}) AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}' UNION ALL SELECT "from" AS addr, toFloat64(0) AS amt_in, toFloat64(toDecimal256(amount_raw,0))/{decimals_factor} AS amt_out FROM {transfers} WHERE contract_address = '{ca}' AND "from" IN ({receiver_in_list}) AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}') GROUP BY addr"""
 
-SQL_DUMPER_DESTINATIONS = """SELECT "to" AS receiver, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS total_amt, count() AS num_tx, min(block_time) AS first_tx, max(block_time) AS last_tx FROM {transfers} WHERE contract_address = '{ca}' AND "from" = '{dumper}' AND block_date >= '{date_floor}' GROUP BY receiver ORDER BY total_amt DESC LIMIT 30"""
+SQL_DUMPER_DESTINATIONS = """SELECT "to" AS receiver, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS total_amt, count() AS num_tx, min(block_time) AS first_tx, max(block_time) AS last_tx FROM {transfers} WHERE contract_address = '{ca}' AND "from" = '{dumper}' AND block_date >= '{date_floor}' GROUP BY receiver ORDER BY total_amt DESC LIMIT 30"""
 
 # v0.7.23: chunkable variant for dumper destinations. SUM + COUNT + MIN +
 # MAX all distribute over chunk partition; merge_chunked_rows handles it.
@@ -145,11 +145,11 @@ SQL_DUMPER_DESTINATIONS = """SELECT "to" AS receiver, sum(toFloat64(toDecimal256
 # _run_one_chunk could return an arbitrary subset (large-fanout dumpers).
 # 200 per chunk × 7 chunks = 1400 candidates feeding the Python merge,
 # which then selects top-30 to match v0.7.22 baseline semantics (H1).
-SQL_DUMPER_DESTINATIONS_CHUNK = """SELECT "to" AS receiver, sum(toFloat64(toDecimal256(amount_raw,0))/1e18) AS total_amt, count() AS num_tx, min(block_time) AS first_tx, max(block_time) AS last_tx FROM {transfers} WHERE contract_address = '{ca}' AND "from" = '{dumper}' AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}' GROUP BY receiver ORDER BY total_amt DESC LIMIT 200"""
+SQL_DUMPER_DESTINATIONS_CHUNK = """SELECT "to" AS receiver, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS total_amt, count() AS num_tx, min(block_time) AS first_tx, max(block_time) AS last_tx FROM {transfers} WHERE contract_address = '{ca}' AND "from" = '{dumper}' AND block_date BETWEEN '{chunk_floor}' AND '{chunk_ceiling}' GROUP BY receiver ORDER BY total_amt DESC LIMIT 200"""
 
 
 # codex MEDIUM #3: every value interpolated into surf SQL (the f-string
-# .format() below) must be a validated address. `ca` is caller-supplied;
+# .format(decimals_factor=decimals_factor_str()) below) must be a validated address. `ca` is caller-supplied;
 # deployer / receivers / dumpers come from surf (on-chain) but we re-validate
 # at the query boundary so a malformed value can never reach the SQL string.
 # v0.7.21.7: chain-aware via chain_router.is_valid_addr (EVM 0x40-hex on EVM
@@ -160,6 +160,7 @@ _HEX_ADDR_RE = re.compile(r"^0x[0-9a-f]{40}$")  # kept for back-compat callers
 from chain_router import (  # noqa: E402
     is_valid_addr as _chain_is_valid_addr,
     get_active_chain as _chain_get_active,
+    decimals_factor_str,
 )
 
 
@@ -294,7 +295,7 @@ def fetch_top_holders_chunked(
         sql = SQL_TOP_HOLDERS_CHUNK.format(
             ca=ca, chunk_floor=chunk_floor, chunk_ceiling=chunk_ceiling,
             transfers=transfers,
-        )
+         decimals_factor=decimals_factor_str())
         return _run_one_chunk(sql, workdir, f"step1b_top_holders_{chunk_floor}")
 
     chunk_results = parallel_run_chunked(_sql_fn, chunks)
@@ -356,7 +357,7 @@ def fetch_receiver_balances_chunked(
             ca=ca, receiver_in_list=receiver_in_list,
             chunk_floor=chunk_floor, chunk_ceiling=chunk_ceiling,
             transfers=transfers,
-        )
+         decimals_factor=decimals_factor_str())
         return _run_one_chunk(sql, workdir, f"{name_prefix}_{chunk_floor}")
 
     chunk_results = parallel_run_chunked(_sql_fn, chunks)
@@ -439,7 +440,7 @@ def fetch_dumper_destinations_chunked(
             ca=ca, dumper=dumper,
             chunk_floor=chunk_floor, chunk_ceiling=chunk_ceiling,
             transfers=transfers,
-        )
+         decimals_factor=decimals_factor_str())
         # v0.7.23: keep `step4_dest_` prefix so existing pytest mocks
         # routing by filename substring (test_v0713_mint_and_none_guards
         # and friends) still match. Per-chunk suffix `_{chunk_floor}`
@@ -496,7 +497,7 @@ def fetch_mint_event_chunked(
             ca=ca,
             chunk_floor=chunk_floor, chunk_ceiling=chunk_ceiling,
             transfers=transfers,
-        )
+         decimals_factor=decimals_factor_str())
         return _run_one_chunk(
             sql, workdir, f"step1_mint_{chunk_floor}",
         )
@@ -849,7 +850,7 @@ def run_backward_trace(
             ca=ca, deployer=deployer,
             date_floor=trace_floor,
             alpha_listing_date=alpha_listing_date,
-        transfers=transfers_table(), dex_trades=dex_trades_table()),
+        transfers=transfers_table(), decimals_factor=decimals_factor_str(), dex_trades=dex_trades_table()),
         max_rows=100,
     )
     results, _ = run_parallel([str(q2)])
@@ -1044,7 +1045,25 @@ def run_backward_trace(
     # LARGEST dispersals first (forensically the chains that matter); flag the
     # rest as truncated. Immediate destinations are still recorded for every
     # dumper (wave display) — only the FURTHER recursive expansion is bounded.
-    MAX_PROMOTED_SUBDUMPERS = 40
+    # v0.9.7 fix (post-decimals): cap step4 total promotions across all
+    # depths. v0.7.14 set 40 to handle XPIN-class wide-fanout tokens, but
+    # with v0.9.7 decimals fix (FOLKS-class 6-decimal tokens), more sub-
+    # dumpers now cross the promote threshold (real amounts surfaced where
+    # 1e-12 量级 bug previously filtered them). FOLKS empirical: 18 sub-
+    # dumpers promoted across 4 batches = 90 chunk SQL = 7+ min step4
+    # alone. Lower the default to 12 so non-18-decimal token reports don't
+    # take 3× longer than 18-decimal equivalents. Tokens that genuinely
+    # need deep coverage (XPIN-class wide fanout) override via env.
+    #
+    # Trade-off: skipped sub-dumpers still appear as `recursion_truncated:
+    # True` + `n_sub_dumpers_skipped: N` in the skeleton, so the report
+    # Data Gap section discloses what was truncated. The forensic verdict
+    # generally sits on the top-12 biggest fish anyway (smaller wallets
+    # individually shift verdict <5%), so truncation cost on the verdict
+    # is low.
+    MAX_PROMOTED_SUBDUMPERS = int(
+        os.environ.get("BINANCE_ALPHA_STEP4_MAX_DUMPERS", "12")
+    )
     # Seeded from first-level receivers only (Step 3 set their dumped_pct to a
     # float); sub-dumpers with possibly-None dumped_pct are appended later by
     # the recursion below. Guard None anyway so a future reorder can't crash.
@@ -1060,6 +1079,7 @@ def run_backward_trace(
     _already_m6.update(_BURN_ADDRS)
     promoted_count = 0
     promote_skipped = 0
+    promote_skipped_tokens = 0.0  # v0.9.7 codex Finding 6: aggregate skipped size
     # v0.9.6 Fix #3 (Codex Windows EVAA 2026-06-15 feedback): collect
     # step4 dumpers SKIPPED due to chunk errors. Pre-v0.9.6 the SKIPPED
     # warning was only printed to stderr; the skeleton had no record so
@@ -1118,7 +1138,7 @@ def run_backward_trace(
             sql = SQL_DUMPER_DESTINATIONS_CHUNK.format(
                 ca=ca, dumper=dumper,
                 chunk_floor=cf, chunk_ceiling=cc,
-                transfers=transfers_table(),
+                transfers=transfers_table(), decimals_factor=decimals_factor_str(),
             )
             # codex audit H2 fix: full 40-char dumper address (already
             # _valid_addr-checked) + per-batch unique idx in filename.
@@ -1232,6 +1252,15 @@ def run_backward_trace(
                 continue  # a sub-receiver shared by two dumpers in this batch
             if promoted_count >= MAX_PROMOTED_SUBDUMPERS:
                 promote_skipped += 1
+                # v0.9.7 codex Finding 6 (HIGH): accumulate the SIZE of
+                # skipped sub-dumpers, not just the count. Pre-fix the cap
+                # silently dropped the 13th+ biggest sub-dumpers from the
+                # receiver set, so the verdict undercounted with only
+                # `recursion_truncated=True` as a hint. Now we surface the
+                # aggregate token amount skipped so the report Data Gap can
+                # say "verdict is a LOWER BOUND — N more sub-dumpers holding
+                # ~X tokens were not expanded".
+                promote_skipped_tokens += float(sub_amt or 0)
                 continue
             m6_ref = evidence_graph.add_m6(
                 type="rule11_sub_dumper",
@@ -1548,6 +1577,11 @@ def run_backward_trace(
         "recursion_truncated": recursion_truncated,
         "n_sub_dumpers_promoted": promoted_count,
         "n_sub_dumpers_skipped": promote_skipped,
+        # v0.9.7 codex Finding 6 (HIGH): aggregate token amount of skipped
+        # sub-dumpers. When >0, the verdict is a LOWER BOUND — the report
+        # Data Gap discloses "N more sub-dumpers holding ~X tokens were not
+        # recursively expanded due to the step4 budget cap".
+        "n_sub_dumpers_skipped_tokens": promote_skipped_tokens,
         # v0.9.6 Fix #3 (Codex Windows EVAA 2026-06-15 feedback): step4
         # dumpers dropped due to chunk errors (any 1/N chunk errored →
         # whole dumper skipped to avoid undercount). Render template
