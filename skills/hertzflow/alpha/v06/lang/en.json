@@ -201,7 +201,7 @@
       "note_5pct_depth": "Derived from Alpha 24h vol (vol_24h / 96 × 0.05 heuristic estimate)",
       "label_dex_lp": "DEX main pool liquidity",
       "label_dex_vol": "DEX main pool 24h volume",
-      "label_lp_flow": "LP 24h net flow",
+      "label_lp_flow": "Pool token 24h net throughput (NOT LP add/remove)",
       "value_lp_flow": "+{net_pct:.2f}% (in {in_tokens:,.0f} / out {out_tokens:,.0f})",
       "label_dex_addr": "DEX main pool address",
       "note_dex_addr": "FDV ${fdv:,}",

@@ -205,7 +205,7 @@
       "note_5pct_depth": "由 Alpha 24h vol 推导 (vol_24h / 96 × 0.05 启发式估算)",
       "label_dex_lp": "DEX 主池流动性",
       "label_dex_vol": "DEX 主池 24h 交易量",
-      "label_lp_flow": "LP 24h 净流",
+      "label_lp_flow": "池子代币 24h 净进出 (throughput, 非 LP 增减)",
       "value_lp_flow": "+{net_pct:.2f}% (in {in_tokens:,.0f} / out {out_tokens:,.0f})",
       "label_dex_addr": "DEX 主池地址",
       "note_dex_addr": "FDV ${fdv:,}",

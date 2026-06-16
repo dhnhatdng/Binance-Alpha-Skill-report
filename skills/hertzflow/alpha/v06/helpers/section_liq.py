@@ -50,6 +50,119 @@ def _curl_json(url: str, timeout: int = 8) -> dict | None:
         return None
 
 
+# v0.9.8 (BR 2026-06-17 LP bug): chain_router prefix → DexScreener chainId.
+# DexScreener uses its own chain slugs; map the skill's active-chain prefix.
+_DEXSCREENER_CHAIN_MAP = {
+    "bsc": "bsc",
+    "ethereum": "ethereum",
+    "base": "base",
+    "arbitrum": "arbitrum",
+    "polygon": "polygon",
+    "optimism": "optimism",
+    "avalanche": "avalanche",
+    "solana": "solana",
+}
+
+
+def fetch_dexscreener_main_pool(ca: str, active_chain: str) -> dict[str, Any] | None:
+    """v0.9.8 root-cause fix for the BR $34.95 LP bug.
+
+    The surf-token-holders + Arkham-label LP path (discover_main_pool) is
+    fragile two ways, both hit by BR (Bedrock):
+      1. Arkham labels are async — a freshly-active PancakeSwap V3 pool
+         may not yet carry entity_type=dex at fetch time, so the real
+         main pool is missed and LP reads None / a wrong pool.
+      2. V4 singleton trap — PancakeSwap/Uniswap V4 store ALL pools'
+         tokens in ONE `PoolManager` singleton (0x000...4444). Arkham
+         labels it `PoolManager`, the regex `\\bpool\\b` matches it, and
+         the skill treats its meaningless shared-vault balance as the
+         token's LP (BR: 207 tokens = $34.95 vs real $1M V3 pool).
+
+    DexScreener reads on-chain pool RESERVES directly (no Arkham
+    dependency, no singleton confusion), so it is the authoritative LP
+    source. Returns the highest-liquidity pool on `active_chain`:
+        {pool_addr, price_usd, liquidity_usd, volume_24h_usd, fdv,
+         market_cap, dex_id, _source: "dexscreener"}
+    or None on any failure (caller falls back to the surf path).
+    """
+    if not ca:
+        return None
+    # codex Finding 9 (MED): Solana base58 mint addresses are CASE-SENSITIVE.
+    # `ca.lower()` corrupts them. Only lowercase EVM (0x-hex, case-insensitive).
+    if active_chain == "solana":
+        ca_norm = ca
+    else:
+        ca_norm = ca.lower()
+    ca = ca_norm
+    ds_chain = _DEXSCREENER_CHAIN_MAP.get(active_chain)
+    doc = _curl_json(
+        f"https://api.dexscreener.com/latest/dex/tokens/{ca}", timeout=8,
+    )
+    if not doc or not isinstance(doc.get("pairs"), list):
+        return None
+    # codex Finding 9: case-aware address comparison helper.
+    _cmp = (lambda a: a) if active_chain == "solana" else (lambda a: (a or "").lower())
+    # Filter to the active chain + token as BASE token, pick max LP.
+    # CRITICAL (codex-flagged): DexScreener's `priceUsd` always refers to
+    # the BASE token. BR has 2 pairs where it is the QUOTE (e.g. "Vyx/BR")
+    # — those pairs' priceUsd is the OTHER token's price (Vyx $0.0198), not
+    # BR's. If such a quote-pair had max LP we'd report the wrong price.
+    # Restricting to baseToken==ca guarantees price_usd is the subject
+    # token's price. Quote-side pools are typically small and excluding
+    # them is the correct trade-off (price correctness > marginal LP
+    # completeness; the surf fallback still sees them).
+    if ds_chain is None:
+        # Unknown chain mapping — refuse to guess across chains (would
+        # pick a pool on the wrong chain). Fall back to surf path.
+        return None
+    candidates = []
+    for p in doc["pairs"]:
+        if (p.get("chainId") or "").lower() != ds_chain:
+            continue
+        base = _cmp((p.get("baseToken") or {}).get("address"))
+        if base != ca:
+            continue
+        lp = (p.get("liquidity") or {}).get("usd")
+        if lp is None:
+            continue
+        # codex Finding 1 (MED): fake-pool guard. DexScreener can list
+        # honeypot / fabricated pairs with huge fake `liquidity.usd` but
+        # zero real trading. A genuine main pool has 24h trades. Record
+        # h24 txn count so the sort can prefer pools with real activity
+        # over zero-activity (likely-fake) high-LP pools.
+        txns = p.get("txns") or {}
+        h24 = txns.get("h24") or {}
+        n_tx = (h24.get("buys") or 0) + (h24.get("sells") or 0)
+        vol24 = (p.get("volume") or {}).get("h24") or 0
+        has_activity = (n_tx > 0) or (vol24 > 0)
+        candidates.append((has_activity, float(lp), p))
+    if not candidates:
+        return None
+    # Sort: pools WITH real 24h activity first, then by LP desc. A fake
+    # high-LP pool with zero trades loses to any real pool. If ALL pools
+    # are zero-activity (rare — brand-new listing), the max-LP one wins
+    # as before (best available).
+    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    _has_activity, lp_usd, best = candidates[0]
+    try:
+        price = float(best.get("priceUsd")) if best.get("priceUsd") else None
+    except (TypeError, ValueError):
+        price = None
+    return {
+        "pool_addr": _cmp(best.get("pairAddress")) or None,
+        "price_usd": price,
+        "liquidity_usd": lp_usd,
+        "volume_24h_usd": (best.get("volume") or {}).get("h24"),
+        "fdv": best.get("fdv"),
+        "market_cap": best.get("marketCap"),
+        "dex_id": best.get("dexId"),
+        # codex Finding 1: flag low-confidence picks (no real 24h activity)
+        # so the report / downstream can treat the LP as unverified.
+        "_lp_low_confidence": not _has_activity,
+        "_source": "dexscreener",
+    }
+
+
 def discover_main_pool(
     ca: str,
     scope_chain_lp: dict[str, dict[str, Any]] | None = None,
@@ -75,6 +188,37 @@ def discover_main_pool(
     """
     chain_lp = scope_chain_lp or {}
     rti = scope_realtime_token_info or {}
+
+    # v0.9.8 (BR 2026-06-17): DexScreener is the AUTHORITATIVE LP source.
+    # It reads on-chain pool reserves directly — no Arkham-label dependency,
+    # no V4-singleton confusion (the two bugs that gave BR a $34.95 LP for
+    # a token with a real $1M PancakeSwap V3 pool). The surf-token-holders
+    # path below remains as a fallback for when DexScreener is down or has
+    # no listing.
+    _ds_chain = primary_chain or _chain_get_active()
+    _ds = fetch_dexscreener_main_pool(ca, _ds_chain)
+    if _ds and _ds.get("liquidity_usd") is not None:
+        # Keep surf project-detail aggregate vol/fdv (cross-chain CEX+DEX)
+        # as primary; DexScreener vol/fdv is single-pool DEX-only. codex
+        # Finding 5 (LOW): track which source actually supplied each so the
+        # report note doesn't falsely claim "surf project-detail" when the
+        # DexScreener fallback was used.
+        _vol_from_surf = rti.get("volume_24h_usd") is not None
+        _fdv_from_surf = rti.get("fdv_usd") is not None
+        return {
+            "pool_addr": _ds.get("pool_addr"),
+            "price_usd": _ds.get("price_usd") if _ds.get("price_usd") is not None
+                         else rti.get("price_usd"),
+            "liquidity_usd": _ds.get("liquidity_usd"),
+            "volume_24h_usd": rti.get("volume_24h_usd") if _vol_from_surf
+                              else _ds.get("volume_24h_usd"),
+            "fdv": rti.get("fdv_usd") if _fdv_from_surf else _ds.get("fdv"),
+            "volume_source": "surf" if _vol_from_surf else "dexscreener",
+            "fdv_source": "surf" if _fdv_from_surf else "dexscreener",
+            "lp_low_confidence": bool(_ds.get("_lp_low_confidence")),
+            "_status": "OK",
+            "_source": "dexscreener",
+        }
 
     # Pick pool from the primary chain's surf top_pool_addr; if primary not
     # set, fall back to the chain with the highest lp_usd across all entries.
