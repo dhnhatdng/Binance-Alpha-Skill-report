@@ -267,6 +267,7 @@ def _curl_json(url: str, timeout_seconds: int = 8) -> dict[str, Any] | None:
             ["curl", "-sS", "--max-time", str(timeout_seconds), url],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             check=False,
+            timeout=timeout_seconds + 5,   # v0.9.9: subprocess ceiling > curl --max-time (deadlock guard)
         )
         if proc.returncode != 0:
             return None
@@ -378,6 +379,7 @@ def fetch_solana_spl_supply(mint: str, timeout_seconds: int = 8) -> dict[str, An
              _SOLANA_RPC_URL],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             check=False,
+            timeout=timeout_seconds + 5,   # v0.9.9: subprocess ceiling > curl --max-time (deadlock guard)
         )
         if proc.returncode != 0:
             return None

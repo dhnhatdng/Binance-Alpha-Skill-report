@@ -105,6 +105,7 @@ def _eth_get_code(addr: str) -> tuple[str, int]:
              "--max-time", "8",
              "-d", json.dumps(payload)],
             capture_output=True, text=True, check=False,
+            timeout=13,   # v0.9.9: subprocess ceiling > curl --max-time 8 (deadlock guard)
         )
         result = json.loads(proc.stdout).get("result", "")
     except Exception:

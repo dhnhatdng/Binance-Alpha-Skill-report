@@ -40,7 +40,17 @@ import subprocess
 import sys
 import time
 from datetime import date, timedelta
+import os
 from pathlib import Path
+
+# v0.9.9 CRITICAL deadlock fix (user report 2026-06-17): hard per-attempt
+# subprocess timeout for `surf onchain-sql`. Without it, a hung surf CLI
+# (stuck network connection) blocks subprocess.run forever → ThreadPool
+# worker never returns → pipeline deadlocks at futex_wait, CPU 0%. Chunks
+# are sized to fit surf's 30s budget; 90s gives headroom for a slow-but-
+# progressing query while still catching a truly stuck one. Override via
+# env for debugging against a slow link.
+_SURF_SUBPROCESS_TIMEOUT = int(os.environ.get("BINANCE_ALPHA_SURF_SUBPROCESS_TIMEOUT", "90"))
 
 # v0.9.1: surf 365-day window guard. Large tables enforce a 365-day
 # block_date window. Any SQL bumping the limit returns INVALID_REQUEST.
@@ -206,12 +216,36 @@ def _run_one(input_path: str, max_attempts: int = 4) -> tuple[str, dict, float]:
     for attempt in range(1, max_attempts + 1):
         _attempts_billed += 1
         t0 = time.perf_counter()
-        # Attempt 1: @file form (older surf CLI / current alpha.40)
-        proc = subprocess.run(
-            ["surf", "onchain-sql", f"@{input_path}"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            check=False,
-        )
+        # v0.9.9 CRITICAL (deadlock fix, user report 2026-06-17 CA
+        # 0x5dbde81f...): subprocess.run had NO timeout. When the surf CLI
+        # hangs on a stuck network connection (connected but server never
+        # responds), subprocess.run blocks FOREVER → the ThreadPoolExecutor
+        # worker never returns → run_parallel's as_completed waits forever
+        # → the whole pipeline deadlocks at futex_wait, CPU 0%, no network.
+        # rule_11's chunked mint lookup (run_parallel → _run_one) was the
+        # exact hang site (46+ min). section_a_scope._run_surf_with_retry
+        # already had a timeout — this path was the gap. Hard cap each
+        # attempt; TimeoutExpired is treated as a transient error so the
+        # existing retry/backoff handles it, then fails loud after
+        # max_attempts instead of hanging.
+        try:
+            # Attempt 1: @file form (older surf CLI / current alpha.40)
+            proc = subprocess.run(
+                ["surf", "onchain-sql", f"@{input_path}"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                check=False, timeout=_SURF_SUBPROCESS_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            elapsed = time.perf_counter() - t0
+            _seconds_total += elapsed
+            resp = {"error": {"code": "SURF_TIMEOUT",
+                              "message": f"surf onchain-sql hung > {_SURF_SUBPROCESS_TIMEOUT}s (killed)"}}
+            last_resp, last_elapsed = resp, elapsed
+            if attempt < max_attempts:
+                time.sleep(min(2 ** attempt - 1, 7) + random.uniform(0, 0.5 * attempt))
+                continue
+            _record_credit(None, _seconds_total, _attempts_billed, success=False)
+            return (input_path, resp, elapsed)
         elapsed = time.perf_counter() - t0
 
         # Detect "surf CLI doesn't grok @file" — these markers come from surf's
@@ -231,12 +265,24 @@ def _run_one(input_path: str, max_attempts: int = 4) -> tuple[str, dict, float]:
             # so --json is redundant — dropping it removes the spec-cache
             # dependency entirely.
             t0 = time.perf_counter()
-            proc = subprocess.run(
-                ["surf", "onchain-sql"],
-                input=payload,
-                capture_output=True, text=True, encoding="utf-8", errors="replace",
-                check=False,
-            )
+            try:
+                proc = subprocess.run(
+                    ["surf", "onchain-sql"],
+                    input=payload,
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    check=False, timeout=_SURF_SUBPROCESS_TIMEOUT,
+                )
+            except subprocess.TimeoutExpired:
+                elapsed = time.perf_counter() - t0
+                _seconds_total += elapsed
+                resp = {"error": {"code": "SURF_TIMEOUT",
+                                  "message": f"surf onchain-sql (stdin) hung > {_SURF_SUBPROCESS_TIMEOUT}s (killed)"}}
+                last_resp, last_elapsed = resp, elapsed
+                if attempt < max_attempts:
+                    time.sleep(min(2 ** attempt - 1, 7) + random.uniform(0, 0.5 * attempt))
+                    continue
+                _record_credit(None, _seconds_total, _attempts_billed, success=False)
+                return (input_path, resp, elapsed)
             elapsed = time.perf_counter() - t0
 
         _seconds_total += elapsed

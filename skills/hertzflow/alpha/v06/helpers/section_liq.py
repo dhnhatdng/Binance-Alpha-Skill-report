@@ -42,6 +42,7 @@ def _curl_json(url: str, timeout: int = 8) -> dict | None:
         proc = subprocess.run(
             ["curl", "-sS", "--max-time", str(timeout), url],
             capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+            timeout=timeout + 5,   # v0.9.9: subprocess ceiling > curl --max-time (deadlock guard)
         )
         if proc.returncode != 0:
             return None
