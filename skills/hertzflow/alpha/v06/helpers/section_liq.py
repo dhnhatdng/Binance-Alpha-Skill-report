@@ -65,7 +65,9 @@ _DEXSCREENER_CHAIN_MAP = {
 }
 
 
-def fetch_dexscreener_main_pool(ca: str, active_chain: str) -> dict[str, Any] | None:
+def fetch_dexscreener_main_pool(
+    ca: str, active_chain: str, anchor_price: float | None = None,
+) -> dict[str, Any] | None:
     """v0.9.8 root-cause fix for the BR $34.95 LP bug.
 
     The surf-token-holders + Arkham-label LP path (discover_main_pool) is
@@ -116,7 +118,9 @@ def fetch_dexscreener_main_pool(ca: str, active_chain: str) -> dict[str, Any] | 
         # Unknown chain mapping — refuse to guess across chains (would
         # pick a pool on the wrong chain). Fall back to surf path.
         return None
-    candidates = []
+    # First pass: collect base-pair candidates + their prices, so we can
+    # compute a consensus price for the corrupted-pair filter below.
+    raw = []
     for p in doc["pairs"]:
         if (p.get("chainId") or "").lower() != ds_chain:
             continue
@@ -126,23 +130,78 @@ def fetch_dexscreener_main_pool(ca: str, active_chain: str) -> dict[str, Any] | 
         lp = (p.get("liquidity") or {}).get("usd")
         if lp is None:
             continue
-        # codex Finding 1 (MED): fake-pool guard. DexScreener can list
-        # honeypot / fabricated pairs with huge fake `liquidity.usd` but
-        # zero real trading. A genuine main pool has 24h trades. Record
-        # h24 txn count so the sort can prefer pools with real activity
-        # over zero-activity (likely-fake) high-LP pools.
+        try:
+            px = float(p.get("priceUsd")) if p.get("priceUsd") else None
+        except (TypeError, ValueError):
+            px = None
+        raw.append((p, float(lp), px))
+    if not raw:
+        return None
+
+    # v1.0.0 (O / o1.exchange 2026-06-18) + codex v1.0.0 R1 hardening:
+    # corrupted-pair price filter. DexScreener listed a $900M "pool" for O
+    # with priceUsd 4.5e26 and $62 24h vol — a broken/fabricated pair.
+    #
+    # Anchor priority (most → least trustworthy):
+    #   1. surf RTI price (`anchor_price` arg) — an EXTERNAL aggregate
+    #      (CEX+DEX, surf project-detail) NOT derived from any single
+    #      DexScreener pair, so a fake/wash pool cannot poison it. This is
+    #      the codex R1 Finding-1 fix: max-vol self-anchor is defeatable by
+    #      a well-funded wash that fakes $50M vol → becomes the anchor →
+    #      real pools wrongly rejected. An external anchor closes that hole.
+    #   2. Highest-24h-VOLUME priced pool — fallback when surf has no
+    #      price. Volume is hard (not impossible) to fake; weaker but
+    #      better than nothing.
+    if anchor_price and anchor_price > 0:
+        _anchor = anchor_price
+    else:
+        _anchor = None
+        _anchor_vol = -1.0
+        for p, lp, px in raw:
+            if px and px > 0:
+                v = (p.get("volume") or {}).get("h24") or 0
+                if v > _anchor_vol:
+                    _anchor_vol = v
+                    _anchor = px
+
+    candidates = []
+    for p, lp, px in raw:
         txns = p.get("txns") or {}
         h24 = txns.get("h24") or {}
         n_tx = (h24.get("buys") or 0) + (h24.get("sells") or 0)
         vol24 = (p.get("volume") or {}).get("h24") or 0
         has_activity = (n_tx > 0) or (vol24 > 0)
-        candidates.append((has_activity, float(lp), p))
+
+        # Price present: corrupted-price reject (deviates > 5x from anchor).
+        if px and px > 0:
+            if _anchor and _anchor > 0:
+                ratio = px / _anchor
+                if ratio > 5.0 or ratio < 0.2:
+                    continue   # price disagrees with the token's true price ⇒ fake
+        else:
+            # codex R1 Finding 2 (HIGH): a large pool with NO price is a
+            # corrupted-pair bypass — it skips the price filter and could
+            # win on fake LP. A real pool always reports a price. Demote
+            # any >$50K no-price pool so it loses to a real priced pool.
+            if lp > 50_000:
+                has_activity = False
+
+        # v1.0.0 turnover demote: a >$50K pool with near-zero vol/LP
+        # turnover is dead/fake even if vol > 0 (O garbage: $62 on $900M =
+        # 7e-8). Demote below real pools. Small pools (<$50K) exempt
+        # (legit quiet new pools). Demote-not-reject: a sleepy big pool
+        # that is the ONLY candidate still gets picked (low-confidence).
+        if lp > 50_000:
+            turnover = (vol24 / lp) if lp else 0
+            if turnover < 0.0001:
+                has_activity = False
+        candidates.append((has_activity, lp, p))
+
     if not candidates:
         return None
-    # Sort: pools WITH real 24h activity first, then by LP desc. A fake
-    # high-LP pool with zero trades loses to any real pool. If ALL pools
-    # are zero-activity (rare — brand-new listing), the max-LP one wins
-    # as before (best available).
+    # Sort: pools WITH real activity first, then by LP desc. A fake
+    # high-LP pool (corrupted price filtered out, or near-zero turnover
+    # demoted) loses to any real pool.
     candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
     _has_activity, lp_usd, best = candidates[0]
     try:
@@ -197,7 +256,16 @@ def discover_main_pool(
     # path below remains as a fallback for when DexScreener is down or has
     # no listing.
     _ds_chain = primary_chain or _chain_get_active()
-    _ds = fetch_dexscreener_main_pool(ca, _ds_chain)
+    # codex v1.0.0 R1 Finding 1: pass surf RTI price as the EXTERNAL price
+    # anchor so a fake/wash DexScreener pool can't self-anchor the
+    # corrupted-price filter. surf project-detail price is a cross-chain
+    # CEX+DEX aggregate, independent of any single DexScreener pair.
+    try:
+        _rti_px = rti.get("price_usd")
+        _rti_px = float(_rti_px) if _rti_px not in (None, "") else None
+    except (TypeError, ValueError):
+        _rti_px = None
+    _ds = fetch_dexscreener_main_pool(ca, _ds_chain, anchor_price=_rti_px)
     if _ds and _ds.get("liquidity_usd") is not None:
         # Keep surf project-detail aggregate vol/fdv (cross-chain CEX+DEX)
         # as primary; DexScreener vol/fdv is single-pool DEX-only. codex
