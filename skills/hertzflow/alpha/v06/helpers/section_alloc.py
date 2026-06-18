@@ -145,14 +145,16 @@ def run(
             f"{r.get('arkham_label') or '—'} ({r.get('addr','')[:10]}…)"
             for r in sorted(lockup_quiet, key=lambda x: x.get("current_balance", 0), reverse=True)[:5]
         )
+        usd_part = f" / ${_usd_str(lockup_balance)}" if current_price_usd else ""
         rows.append({
-            "item": f"项目方/基建/分发池地址 {len(lockup_quiet)} 个 (vesting / 多签 / treasury / DEX 基建 / CEX 托管 / 第三方分发平台 / 散户 claim 池, Arkham 已确认)",
-            "value": (
-                f"**{int(lockup_balance):,} tokens (= {_pct(lockup_balance)}% 总供应"
-                + (f" / ${_usd_str(lockup_balance)}" if current_price_usd else "")
-                + ")**"
+            "item": t("sec1.alloc.label_lockup", n=len(lockup_quiet)),
+            "value": t(
+                "sec1.alloc.value_lockup",
+                tokens=int(lockup_balance),
+                pct=_pct(lockup_balance),
+                usd_part=usd_part,
             ),
-            "source": f"Arkham label 命中: {breakdown}",
+            "source": t("sec1.alloc.source_lockup", breakdown=breakdown),
         })
 
     # v0.7.20.2: 已销毁 (burn) row. 0xdead / 0x0 持仓代表永久退出流通的供应,

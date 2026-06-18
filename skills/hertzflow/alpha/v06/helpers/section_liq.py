@@ -454,7 +454,7 @@ def run(
         {
             "anchor": t("section.liq.label_dex_vol"),
             "value": f"${pool['volume_24h_usd']:,.0f}" if pool.get("volume_24h_usd") else dash,
-            "note": "surf project-detail (跨链 CEX+DEX 实时聚合)",
+            "note": t("sec2.liq_note_dex_vol_source"),
         },
         {
             "anchor": t("section.liq.label_lp_flow"),
@@ -471,7 +471,7 @@ def run(
             # dict because lp_24h_flow returns {} (no skip key) when there
             # is no pool_addr to query, which on Solana is the common case.
             "note": (
-                "surf 不覆盖 (chain SQL 表不存在), 见顶部 Solana banner"
+                t("sec2.liq_note_lp_flow_no_sql")
                 if not _sql_supported()
                 else f"surf {transfers_table()}"
             ),

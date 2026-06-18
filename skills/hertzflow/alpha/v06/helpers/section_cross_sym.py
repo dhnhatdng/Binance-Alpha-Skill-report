@@ -60,6 +60,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from i18n import t   # v0.6.2 i18n
 import cross_sym_registry
 import cross_sym_detector
 import identity_classifier
@@ -95,31 +96,32 @@ def _derive_behavior_hint(role_classification: dict | None) -> str | None:
     # Jump / Cumberland MM bot framework; LITE_MM ≈ smaller MM bot;
     # PROXY_OR_SIMPLE ≈ thin proxy/forwarder contract; EOA ≈ user wallet.
     if not is_contract:
-        base = "EOA / 用户钱包"
+        base = t("sec1.cross_sym.behavior_base_eoa")
     elif size_tier == "FULL_MM":
-        base = "做市 MM 框架 (24KB+ 大合约, 类 Wintermute/Jump/Cumberland 风格)"
+        base = t("sec1.cross_sym.behavior_base_full_mm")
     elif size_tier == "LITE_MM":
-        base = "轻量 MM 合约 (5-24KB, 简化做市 bot)"
+        base = t("sec1.cross_sym.behavior_base_lite_mm")
     elif size_tier == "PROXY_OR_SIMPLE":
-        base = "代理 / 简单合约 (< 5KB, 行为不确定)"
+        base = t("sec1.cross_sym.behavior_base_proxy_simple")
     else:
-        base = f"合约 (size_tier {size_tier or '未知'})"
+        base = t("sec1.cross_sym.behavior_base_contract_generic",
+                 size_tier=size_tier or t("common.unknown"))
 
     # Augment with netflow direction
     if netflow_shape == "net_seller":
-        flow = "出场净卖 (out > in)"
+        flow = t("sec1.cross_sym.flow_net_seller")
     elif netflow_shape == "net_holder":
-        flow = "净接收 (in > out, 在累积)"
+        flow = t("sec1.cross_sym.flow_net_holder")
     elif netflow_shape == "accumulating":
-        flow = "累积持仓"
+        flow = t("sec1.cross_sym.flow_accumulating")
     elif netflow_shape == "balanced":
-        flow = "in/out 接近平衡 (可能 MM 做市状态)"
+        flow = t("sec1.cross_sym.flow_balanced")
     elif netflow_shape:
-        flow = f"netflow 形态 {netflow_shape}"
+        flow = t("sec1.cross_sym.flow_generic", netflow_shape=netflow_shape)
     else:
-        flow = "netflow 未知"
+        flow = t("sec1.cross_sym.flow_unknown")
 
-    return f"{base}, {flow}"
+    return t("sec1.cross_sym.behavior_hint_join", base=base, flow=flow)
 
 
 def run(

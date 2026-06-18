@@ -258,39 +258,48 @@ def _verify_update_applied(pre_update_version: str | None) -> bool:
 
 
 def _print_auto_update_success(old: str, new: str) -> None:
-    print(
-        f"\n✅ 已自动升级 ({old or '?'} → {new}). 请重新运行刚才的命令.",
-        file=sys.stderr,
-    )
-    print(
-        "    Auto-update applied. Please re-run your last command.\n",
-        file=sys.stderr,
-    )
+    # Lazy import to avoid circular dependency if i18n calls back into us.
+    try:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from i18n import t
+        print(
+            f"\n{t('sec2.update_auto_success', old=old or '?', new=new)}\n",
+            file=sys.stderr,
+        )
+    except Exception:
+        # Fall back to English if i18n itself fails
+        print(
+            f"\n✅ Auto-update applied ({old or '?'} → {new}). Please re-run your last command.\n",
+            file=sys.stderr,
+        )
 
 
 def _print_auto_update_failed(reason: str = "") -> None:
     # Reason-specific human message so the user knows whether to install
     # npm, install skills CLI, fix network, etc.
-    reason_zh = {
-        "timeout_180s": "(超时 180s — 网络/代理慢, 重试通常可恢复)",
-        "npx_missing": "(本地没装 Node.js — 先装 https://nodejs.org/)",
-        "no_skills_cli": "(本地没装 `skills` CLI — 先跑 `npm install -g @vercel/skills`)",
-        "no_change_on_disk": "(npx 退出 0 但当前 checkout 未变 — 可能是手动 clone 的 repo, 请用 git pull 升级)",
-    }.get(reason, "")
-    reason_en = {
-        "timeout_180s": "(timed out at 180s — likely slow network/proxy, retry usually works)",
-        "npx_missing": "(no Node.js installed locally — install from https://nodejs.org/)",
-        "no_skills_cli": "(no `skills` CLI installed — run `npm install -g @vercel/skills`)",
-        "no_change_on_disk": "(npx exited 0 but this checkout didn't change — likely manual git clone, run `git pull`)",
-    }.get(reason, "")
-    print(
-        f"\n⚠️ 自动升级失败 {reason_zh}. 请手动升级后重试.",
-        file=sys.stderr,
-    )
-    print(
-        f"    Auto-update failed {reason_en}. Please update manually.\n",
-        file=sys.stderr,
-    )
+    # Lazy import to avoid circular dependency if i18n calls back into us.
+    try:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from i18n import t
+        reason_text = t(f"sec2.update_reason_{reason}") if reason in (
+            "timeout_180s", "npx_missing", "no_skills_cli", "no_change_on_disk"
+        ) else ""
+        print(
+            f"\n{t('sec2.update_auto_failed', reason=reason_text)}\n",
+            file=sys.stderr,
+        )
+    except Exception:
+        # Fall back to English if i18n itself fails
+        reason_en = {
+            "timeout_180s": "(timed out at 180s — likely slow network/proxy, retry usually works)",
+            "npx_missing": "(no Node.js installed locally — install from https://nodejs.org/)",
+            "no_skills_cli": "(no `skills` CLI installed — run `npm install -g @vercel/skills`)",
+            "no_change_on_disk": "(npx exited 0 but this checkout didn't change — likely manual git clone, run `git pull`)",
+        }.get(reason, "")
+        print(
+            f"\n⚠️ Auto-update failed {reason_en}. Please update manually.\n",
+            file=sys.stderr,
+        )
 
 
 def record_install(commit_sha: str, *, installed_file: Path = DEFAULT_INSTALLED_FILE) -> None:

@@ -56,6 +56,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 from fake_mining_detector import classify_token_mining_mode
+from i18n import t   # v0.6.2 i18n
 
 # Threshold for suspected_operator_reserve heuristic.
 # v0.8.4.5: 10% → 3% (Velvet review caught miss — top unclassified at
@@ -131,7 +132,7 @@ def enrich_monitoring_with_hidden_operators(skel: dict) -> dict:
                     "n": next_n,
                     "addr_short": d_addr[:10],
                     "addr_full": d_addr,
-                    "role": "伪矿币 铸币集群成员",
+                    "role": t("sec2.hidden_op_role_fake_mining_cluster"),
                     "status_emoji": "🟡",
                     "balance_tokens": None,
                     "recent_activity_72h": False,
@@ -181,7 +182,7 @@ def enrich_monitoring_with_hidden_operators(skel: dict) -> dict:
                     "n": next_n,
                     "addr_short": addr[:10],
                     "addr_full": addr,
-                    "role": "启发式抓出的隐藏庄家弹药",
+                    "role": t("sec2.hidden_op_role_suspected_reserve"),
                     "status_emoji": "🟡",
                     # Heuristic-flagged: balance is current (surf
                     # token-holders returns current balance). Setting

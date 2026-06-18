@@ -51,6 +51,7 @@ from contextlib import nullcontext as _nullcontext
 from chain_router import transfers_table, dex_trades_table  # v0.7.20
 
 sys.path.insert(0, str(Path(__file__).parent))
+from i18n import t   # v0.6.2 i18n
 try:
     from parallel_surf import run_parallel
 except ImportError:
@@ -1063,9 +1064,10 @@ def check_surf_data_freshness(ca: str, alpha_listing_date: str | None) -> dict[s
     if lag_hours > 24:
         # v0.7.9 中性表述: 不说"滞后", 说"底层数据可获得至 XXX". 让用户知道
         # 数据截止时间, 而不是带责备色彩的"晚了几天".
-        out["warning"] = (
-            f"底层数据可获得至 {out['latest_surf_date_utc']} UTC "
-            f"(此后 {out['lag_hours']:.1f} 小时的链上活动需到 BscScan 直接核对)"
+        out["warning"] = t(
+            "sec1.scope.data_freshness_warning",
+            latest_date=out['latest_surf_date_utc'],
+            lag_hours=out['lag_hours'],
         )
     return out
 

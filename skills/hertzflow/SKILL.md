@@ -36,6 +36,29 @@ research. Like Surf, it's one skill with internal routing — read the
 table below to see which sub-domain handles the user's request, then
 follow that sub-domain's `INSTRUCTIONS.md`.
 
+## 🌐 Language — MANDATORY, read first
+
+**Detect the language of the user's most recent message and use that
+language for everything: your conversation replies AND the generated
+report.** This is not optional and not a preference the user has to
+ask for.
+
+- Message contains CJK characters (`一-鿿`, kana, hangul) → operate in
+  **Chinese** (`zh`): reply in Chinese, run the pipeline with `--lang zh`.
+- Otherwise (English / Latin-script prompt) → operate in **English**
+  (`en`): reply in English, run the pipeline with `--lang en`.
+
+Supported report languages are `zh` and `en` (static, human-curated
+packs). For a prompt in any other language, reply in that language but
+generate the report in `en` (closest supported), and say so in one line.
+
+The report-body language is locked at **pipeline** time via
+`forensic_pipeline.py --lang {zh|en}` — it cannot be changed at render
+time, and narrative fills must be authored in the same language. See the
+"Report language" section of `alpha/INSTRUCTIONS.md` for the exact rule.
+Getting this wrong forces a full pipeline re-run (re-spends Surf credits),
+so set it from the user's language up front.
+
 ## Routing table
 
 | If the user input matches… | Sub-domain | Instructions file |

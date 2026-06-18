@@ -173,9 +173,9 @@ def run(symbol: str, alpha_listing_date: str) -> dict[str, Any]:
                 "ts": dash, "since": dash}
 
     cex_trace_rows = [
-        _row("Binance", binance, "Binance 永续"),
-        _row("Aster", aster, "Aster 永续"),
-        _row("Bitget", bitget, "Bitget 永续"),
+        _row("Binance", binance, t("sec1.cex_trace.perp_label", exchange="Binance")),
+        _row("Aster", aster, t("sec1.cex_trace.perp_label", exchange="Aster")),
+        _row("Bitget", bitget, t("sec1.cex_trace.perp_label", exchange="Bitget")),
     ]
 
     return {

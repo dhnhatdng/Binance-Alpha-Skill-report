@@ -64,59 +64,72 @@ from io import StringIO
 from pathlib import Path
 from typing import Any
 
+from i18n import t   # v0.6.2 i18n
+
 
 # Role enum → short token for label assembly.
 # Order matters: more specific match first.
 # 中文 → 中文 short token (beta.9 — user request: 钱包标注跟报告语言一致).
 # Pipeline now emits Chinese role strings; tokens stay Chinese for GMGN
 # tag matching. Order: most-specific first.
+# v0.6.2 i18n: the LEFT side is the matching needle against pipeline /
+# render-emitted role strings (always carries Chinese/English regardless
+# of active lang, so it stays a literal). The RIGHT side is now an i18n
+# KEY — _role_token() resolves it via t() at lookup time so the emitted
+# short token follows the active lang (e.g. 庄家 vs Operator), as the
+# write_all() docstring documents.
 _ROLE_TOKEN_MAP = [
     # 中文 role strings from forensic_pipeline._build_monitoring_wallets.
     # v0.7.15 (派发/分发 术语统一): rule_11 链上转账场景一律用 "分发" 系列;
     # 旧 lang/zh.json 输出的 "派发" 系列仍保留映射,让 monitoring 能识别由
     # 上版本 render 出来的报告 — 不破老报告的钱包标注。
-    ("项目方部署钱包", "项目方"),
-    ("项目方钱包", "项目方"),
+    ("项目方部署钱包", "role.DEPLOYER.short"),
+    ("项目方钱包", "role.DEPLOYER.short"),
     # NEW (v0.7.15 — 链上"分发"系列). codex LOW: more-specific BEFORE
     # general so a "分发中内幕钱包" wallet name is tagged via its own entry,
     # not the looser "分发中钱包" prefix.
-    ("已分完内幕钱包", "已分完"),
-    ("分发中内幕钱包", "分发中"),
-    ("分发中钱包", "分发中"),
+    ("已分完内幕钱包", "role.RULE11_FULL.short"),
+    ("分发中内幕钱包", "role.RULE11_PARTIAL.short"),
+    ("分发中钱包", "role.RULE11_PARTIAL.short"),
     # LEGACY (pre-v0.7.15 — 旧 "派发" 系列, 仅用于老报告匹配); same ordering.
-    ("已派完内幕钱包", "已派完"),
-    ("派发中内幕钱包", "派发中"),
-    ("派发中钱包", "派发中"),
-    ("潜伏钱包", "潜伏"),
-    ("庄家中转地", "庄家"),
-    ("庄家中转", "庄家"),
-    ("跨币大户", "跨币"),
-    ("散户接收", "散户"),
-    ("近 72h 异常大单参与方", "异常"),
-    ("异常大单参与方", "异常"),
-    ("DEX 主池", "主池"),
-    # English legacy (in case some path emits English) — fallback
-    ("Cross-token whale", "CrossSym"),
-    ("Operator relay", "Operator"),
-    ("operator relay", "Operator"),
-    ("Deployer", "Deployer"),
-    ("Full Dumper", "Dumper"),
-    ("Partial Dumper", "PDumper"),
-    ("Partial dumper", "PDumper"),
-    ("Quiet", "Quiet"),
-    ("DEX", "LP"),
-    ("LP", "LP"),
-    ("72h", "Anomaly"),
-    ("anomaly", "Anomaly"),
-    ("Anomaly", "Anomaly"),
+    ("已派完内幕钱包", "mon.token_full_dumper_legacy"),
+    ("派发中内幕钱包", "mon.token_partial_legacy"),
+    ("派发中钱包", "mon.token_partial_legacy"),
+    ("潜伏钱包", "role.RULE11_QUIET.short"),
+    ("庄家中转地", "mon.token_operator"),
+    ("庄家中转", "mon.token_operator"),
+    ("跨币大户", "mon.token_cross_sym"),
+    ("散户接收", "mon.token_retail"),
+    ("近 72h 异常大单参与方", "role.ANOMALY.short"),
+    ("异常大单参与方", "role.ANOMALY.short"),
+    ("DEX 主池", "mon.token_lp"),
+    # English legacy (in case some path emits English) — fallback. Resolve
+    # to the SAME i18n keys so the emitted token follows active lang too.
+    ("Cross-token whale", "mon.token_cross_sym"),
+    ("Operator relay", "mon.token_operator"),
+    ("operator relay", "mon.token_operator"),
+    ("Deployer", "role.DEPLOYER.short"),
+    ("Full Dumper", "mon.token_full_dumper_legacy"),
+    ("Partial Dumper", "mon.token_partial_legacy"),
+    ("Partial dumper", "mon.token_partial_legacy"),
+    ("Quiet", "role.RULE11_QUIET.short"),
+    ("DEX", "mon.token_lp"),
+    ("LP", "mon.token_lp"),
+    ("72h", "role.ANOMALY.short"),
+    ("anomaly", "role.ANOMALY.short"),
+    ("Anomaly", "role.ANOMALY.short"),
 ]
 
 
 def _role_token(role_str: str) -> str:
-    """Map a free-form role string to a short token for label assembly."""
-    for pattern, token in _ROLE_TOKEN_MAP:
+    """Map a free-form role string to a short token for label assembly.
+
+    v0.6.2 i18n: _ROLE_TOKEN_MAP right side is an i18n key; resolve it via
+    t() so the emitted token follows the active lang.
+    """
+    for pattern, token_key in _ROLE_TOKEN_MAP:
         if pattern in role_str:
-            return token
+            return t(token_key)
     # Default: take first word, capitalize, truncate to 8 chars
     head = re.split(r"[\s\(]", role_str.strip(), maxsplit=1)[0]
     return (head or "Other")[:8]

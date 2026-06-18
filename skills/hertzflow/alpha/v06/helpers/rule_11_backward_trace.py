@@ -1444,10 +1444,12 @@ def run_backward_trace(
                 "ts": _ts_to_iso(s["first_tx"]),
                 "hours_ago_text": "<LLM_NARRATIVE_PLACEHOLDER>",
                 # v0.7.9: 同源合并 — "X → N 个新地址" 而不是 "X → 0xabc..."
-                "from_to": (
-                    f"`{s['dumper_addr'][:10]}…` → {s['n_dests']} 个接收地址"
+                "from_to": t(
+                    "sec1.rule_11.wave2_from_to",
+                    dumper_short=s['dumper_addr'][:10],
+                    n_dests=s['n_dests'],
                 ),
-                "amount": f"合计 {s['total_amt']:,.0f} tokens",
+                "amount": t("sec1.rule_11.wave2_amount", total_amt=s['total_amt']),
                 "nature": "<LLM_NARRATIVE_PLACEHOLDER>",
             })
         if wave2_events:

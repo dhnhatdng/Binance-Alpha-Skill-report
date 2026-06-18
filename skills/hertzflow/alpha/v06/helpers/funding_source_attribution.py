@@ -773,7 +773,7 @@ def discover_mint_authorities(
 #  - top_holders: balance ≈ 0 keeps them off top-30
 _SQL_HIGH_THROUGHPUT = """WITH ins AS (SELECT "to" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS amt_in, count() AS n_in FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date >= '{date_floor}' GROUP BY addr), outs AS (SELECT "from" AS addr, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS amt_out, count() AS n_out FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date >= '{date_floor}' GROUP BY addr) SELECT ins.addr, ins.amt_in AS total_in, COALESCE(outs.amt_out, 0) AS total_out, ins.amt_in - COALESCE(outs.amt_out, 0) AS balance, ins.n_in + COALESCE(outs.n_out, 0) AS n_tx FROM ins LEFT JOIN outs ON ins.addr = outs.addr WHERE ins.amt_in >= {min_throughput} AND ins.amt_in <= {max_throughput} AND abs(ins.amt_in - COALESCE(outs.amt_out, 0)) < ins.amt_in * {max_balance_frac} AND ins.n_in + COALESCE(outs.n_out, 0) >= {min_n_tx} AND ins.addr != '0x0000000000000000000000000000000000000000' AND ins.addr != '0x000000000000000000000000000000000000dead' ORDER BY ins.amt_in DESC LIMIT {top_n}"""
 
-# v0.9.4 + codex M41 fixes: chunkable variant. Per-chunk SQL uses BETWEEN
+# v0.9.4 + audit fixes: chunkable variant. Per-chunk SQL uses BETWEEN
 # (partition pruning) so each chunk only scans ~30d of bsc_transfers. The
 # 2-layer CTE form is preserved per chunk because at 30d window the ins/outs
 # materialization is small enough that ClickHouse handles it inside 30s.
@@ -874,7 +874,7 @@ def discover_high_throughput_dumpers(
     if max_throughput is None:
         max_throughput = (float(total_supply) * 0.05) if total_supply else 5e17
 
-    # v0.9.4 + codex M41 Fix 5: chunked path for long windows. Short windows
+    # v0.9.4 + audit fix 5: chunked path for long windows. Short windows
     # collapse to a single chunk → SQL shape preserved as BETWEEN, identical
     # behavior to v0.9.3 single-shot. Long windows split to 30d chunks
     # (NOT 90d — funding_attribution heavy CTE is per-chunk heavier than
@@ -1014,7 +1014,7 @@ def discover_high_throughput_dumpers(
 # fan-out.
 _SQL_FANOUT_HUB_CANDIDATES = """WITH recipient_amounts AS (SELECT "from" AS hub, "to" AS recipient, sum(toFloat64(toDecimal256(amount_raw,0))/{decimals_factor}) AS rec_amt FROM {transfers} WHERE contract_address = '{ca_lc}' AND block_date >= '{date_floor}' AND "to" != '0x0000000000000000000000000000000000000000' AND "to" != '0x000000000000000000000000000000000000dead' GROUP BY hub, recipient HAVING rec_amt >= {min_per_recipient}) SELECT hub, count() AS n_recipients, sum(rec_amt) AS total_out, min(rec_amt) AS min_per, avg(rec_amt) AS avg_per FROM recipient_amounts GROUP BY hub HAVING n_recipients BETWEEN {min_recipients} AND {max_recipients} AND total_out >= {min_total_out} ORDER BY total_out DESC LIMIT {top_n}"""
 
-# v0.9.4 + codex M41 fixes: chunkable variant. Per-chunk SQL outputs raw
+# v0.9.4 + audit fixes: chunkable variant. Per-chunk SQL outputs raw
 # (hub, recipient, rec_amt) pairs — the outer GROUP BY hub + hub-level
 # HAVING happens entirely in Python after the per-(hub, recipient) merge.
 #
@@ -1105,7 +1105,7 @@ def discover_cex_fanout_hubs(
     surf_window_floor = (date.today() - timedelta(days=_SURF_MAX_LOOKBACK_DAYS)).isoformat()
     date_floor_clamped = surf_window_floor if date_floor < surf_window_floor else date_floor
 
-    # v0.9.4 + codex M41 Fix 5: Phase 1 chunked. Short windows collapse to
+    # v0.9.4 + audit fix 5: Phase 1 chunked. Short windows collapse to
     # single chunk (no regression for new tokens). Long windows split to
     # 30d chunks (heavier than rule_11 per-chunk; 90d may still hit 30s
     # budget on EVAA-class tokens).

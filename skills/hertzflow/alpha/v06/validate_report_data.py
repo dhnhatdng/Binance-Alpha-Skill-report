@@ -343,9 +343,10 @@ class Validator:
         # 0.8 schema 兼容 (没 breaking change), 只是 architecture rearch
         # (folder 重组 + 单 skill router). schema 字段未动.
         if s_ver and not (s_ver.startswith("0.6") or s_ver.startswith("0.7")
-                          or s_ver.startswith("0.8") or s_ver.startswith("0.9")):
+                          or s_ver.startswith("0.8") or s_ver.startswith("0.9")
+                          or s_ver.startswith("1.0")):
             self.errors.append(
-                f"V_SCHEMA_VERSION: expected 0.6.x / 0.7.x / 0.8.x / 0.9.x, "
+                f"V_SCHEMA_VERSION: expected 0.6.x / 0.7.x / 0.8.x / 0.9.x / 1.0.x, "
                 f"got {s_ver!r}"
             )
 

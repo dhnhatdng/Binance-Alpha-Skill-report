@@ -61,6 +61,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from i18n import t   # v0.6.2 i18n
+
 # ----------------------------------------------------------------------
 # Severity ranking (used to pick primary_behavior + sort active_labels)
 # ----------------------------------------------------------------------
@@ -83,25 +85,31 @@ _CATEGORY_OF = {
     "D1": "D", "D2": "D",
 }
 
-LABEL_NAMES_ZH = {
-    "A1": "潜伏蓄筹 (内幕余额集中未流出)",
-    "A2": "CEX 提币 大规模分发 控筹",
-    "A3": "Mint / 跨链桥 / 挖矿 供应源",
-    "B1": "对敲成交放大 (24h vol 不可信)",
-    "B2": "假深度 (LP/mcap 失配 或 vol/LP 偏高)",
-    "C1": "链上确认流出 (CEX 充值 + DEX swap)",
-    "C2": "历史高频庄家清仓",
-    "C3": "近 72 小时异常链上活动",
-    "D1": "跨币种余额命中钱包",
-    "D2": "跨链部署 / 协同",
-}
+# v0.6.2 i18n: built lazily (at build_profile call time) so the active
+# language set by the pipeline is honored. Enum keys (A1/B1/... and
+# A/B/C/D) are stable; only the display values are translated.
+def _label_names_zh() -> dict:
+    return {
+        "A1": t("behavior.label_name.A1"),
+        "A2": t("behavior.label_name.A2"),
+        "A3": t("behavior.label_name.A3"),
+        "B1": t("behavior.label_name.B1"),
+        "B2": t("behavior.label_name.B2"),
+        "C1": t("behavior.label_name.C1"),
+        "C2": t("behavior.label_name.C2"),
+        "C3": t("behavior.label_name.C3"),
+        "D1": t("behavior.label_name.D1"),
+        "D2": t("behavior.label_name.D2"),
+    }
 
-CATEGORY_NAMES_ZH = {
-    "A": "筹码准备",
-    "B": "成交制造",
-    "C": "出货行为",
-    "D": "协同结构",
-}
+
+def _category_names_zh() -> dict:
+    return {
+        "A": t("behavior.category_name.A"),
+        "B": t("behavior.category_name.B"),
+        "C": t("behavior.category_name.C"),
+        "D": t("behavior.category_name.D"),
+    }
 
 
 def _g(d: Any, *keys: str, default: Any = None) -> Any:
@@ -365,8 +373,7 @@ def classify(m: dict) -> dict:
             sev, "A",
             {"pure_insider_pct": round(key_holder_pct, 2),
              "sell_pct_circ": round(m["sell_pct_circ"], 3)},
-            f"内幕余额集中度 {key_holder_pct:.1f}% 总供应, 链上确认流出 < 1%, "
-            f"集中筹码尚未离开内幕圈"
+            t("behavior.summary.A1", key_holder_pct=key_holder_pct)
         )
     else:
         out["A1"] = _label("OFF", "A", {}, "")
@@ -398,25 +405,17 @@ def classify(m: dict) -> dict:
         sev = "MEDIUM"
     if sev != "OFF":
         if stale:
-            summary_zh = (
-                f"{hubs} 个集散钱包从中心化交易所来源拆筹码到下游子钱包, "
-                f"分散顶部持币人集中度. ⚠️ 净控筹量级跑当前版本未刷新或 SQL "
-                f"截断, 旧 gross 数 ({metric_source}) 不可信 — 请用最新 "
-                f"pipeline 重跑以获取 net % 数."
-            )
+            summary_zh = t("behavior.summary.A2_stale",
+                           hubs=hubs, metric_source=metric_source)
         else:
             fout_circ = m.get("fanout_total_pct_circ")
             if fout_circ is not None:
-                summary_zh = (
-                    f"{hubs} 个集散钱包从中心化交易所来源拆筹码到 {rcpts} 个子钱包 "
-                    f"(净控筹**占当前流通 {fout_circ:.2f}%** / 占总供应 {fout:.2f}%), "
-                    f"分散顶部持币人集中度"
-                )
+                summary_zh = t("behavior.summary.A2_circ",
+                               hubs=hubs, rcpts=rcpts,
+                               fout_circ=fout_circ, fout=fout)
             else:
-                summary_zh = (
-                    f"{hubs} 个集散钱包从中心化交易所来源拆筹码到 {rcpts} 个子钱包 "
-                    f"(净控筹占总供应 {fout:.2f}%), 分散顶部持币人集中度"
-                )
+                summary_zh = t("behavior.summary.A2_supply",
+                               hubs=hubs, rcpts=rcpts, fout=fout)
         out["A2"] = _label(
             sev, "A",
             {"fanout_hubs": hubs, "fanout_recipients": rcpts,
@@ -450,8 +449,7 @@ def classify(m: dict) -> dict:
             {"mint_authorities": mint_count,
              "mint_pct_supply_max": round(mint_max, 2),
              "mint_pct_supply_sum": round(mint_sum, 2)},
-            f"{mint_count} 个铸币权限合约存在 (累计铸造占流通供应 {mint_sum:.1f}%), "
-            f"持续供应源, 后续 铸造 → 出货 可能"
+            t("behavior.summary.A3", mint_count=mint_count, mint_sum=mint_sum)
         )
     else:
         out["A3"] = _label("OFF", "A", {}, "")
@@ -477,8 +475,8 @@ def classify(m: dict) -> dict:
             sev, "B",
             {"wash_swap_count": swap, "wash_top_bot_share": round(share, 3),
              "wash_n_dex_addrs": sellers},
-            f"24 小时内 {swap:,} 笔链上撮合, {sellers} 个链上交易地址, 单一对敲机器人占 "
-            f"{share * 100:.1f}% — 24 小时成交额含大量对敲, 不等同真实成交承接量"
+            t("behavior.summary.B1", swap=swap, sellers=sellers,
+              share_pct=share * 100)
         )
     else:
         out["B1"] = _label("OFF", "B", {}, "")
@@ -508,10 +506,9 @@ def classify(m: dict) -> dict:
             {"vol_lp_ratio": round(vol_lp, 2) if vol_lp else None,
              "lp_mcap_ratio": round(lp_mcap, 4) if lp_mcap else None,
              "lp_usd": lp_usd},
-            f"成交量/流动性 比 = {vol_lp:.1f}× / 流动性/市值 比 = {lp_mcap:.4f} — 表面流动性偏低, "
-            f"单笔成交对价格冲击大"
+            t("behavior.summary.B2_ratio", vol_lp=vol_lp, lp_mcap=lp_mcap)
             if vol_lp is not None and lp_mcap is not None
-            else f"流动性 ${lp_usd:,.0f} 偏薄, 单笔成交滑点高"
+            else t("behavior.summary.B2_thin", lp_usd=lp_usd)
         )
     else:
         out["B2"] = _label("OFF", "B", {}, "")
@@ -536,8 +533,7 @@ def classify(m: dict) -> dict:
             sev, "C",
             {"net_sellout_usd": round(net_sell, 0),
              "sell_pct_circ": round(sell_pct, 3)},
-            f"链上确认流出 ${net_sell:,.0f} (占流通 {sell_pct:.2f}%) — "
-            f"中心化交易所充值 + 链上撮合 路径已观察到内幕真实变现"
+            t("behavior.summary.C1", net_sell=net_sell, sell_pct=sell_pct)
         )
     else:
         out["C1"] = _label("OFF", "C", {}, "")
@@ -563,8 +559,7 @@ def classify(m: dict) -> dict:
             sev, "C",
             {"ht_operator_count": ht_count,
              "ht_throughput_pct_supply": round(ht_pct, 2)},
-            f"{ht_count} 个高频庄家钱包 (累计**过账** 占总供应 {ht_pct:.0f}%, 过账 = token 进出流量, 不等于卖出量), "
-            f"历史已离场, 余额接近 0"
+            t("behavior.summary.C2", ht_count=ht_count, ht_pct=ht_pct)
         )
     else:
         out["C2"] = _label("OFF", "C", {}, "")
@@ -586,11 +581,11 @@ def classify(m: dict) -> dict:
     else:
         sev = "OFF"
     if sev != "OFF":
-        trunc_note = " (检测器满量程截断)" if trunc and a72 >= 100 else ""
+        trunc_note = t("behavior.summary.C3_trunc_note") if trunc and a72 >= 100 else ""
         out["C3"] = _label(
             sev, "C",
             {"anomaly_72h_count": a72, "truncated": trunc},
-            f"近 72 小时 {a72} 笔大额异常转移 (笔数, 不是 token 量){trunc_note}, 链上行为活跃"
+            t("behavior.summary.C3", a72=a72, trunc_note=trunc_note)
         )
     else:
         out["C3"] = _label("OFF", "C", {}, "")
@@ -617,8 +612,7 @@ def classify(m: dict) -> dict:
         out["D1"] = _label(
             sev, "D",
             {"cross_sym_whales": cs},
-            f"{cs} 个钱包同时在本币与其他 Alpha 币种上有余额命中 (跨币种检测器), "
-            f"可能是跨币种操盘 / 机构地址 / 风投子钱包集群"
+            t("behavior.summary.D1", cs=cs)
         )
     else:
         out["D1"] = _label("OFF", "D", {}, "")
@@ -640,8 +634,7 @@ def classify(m: dict) -> dict:
         out["D2"] = _label(
             sev, "D",
             {"non_primary_chains": non_prim, "cg_chains": cg},
-            f"本币在 {cg} 条链有部署 (主链外 {non_prim} 条有独立链上命中), "
-            f"跨链出货路径需独立监控"
+            t("behavior.summary.D2", cg=cg, non_prim=non_prim)
         )
     else:
         out["D2"] = _label("OFF", "D", {}, "")
@@ -682,6 +675,6 @@ def build_profile(skel: dict) -> dict:
         "primary_behavior": primary,
         "by_label": by_label,
         "category_order": ["A", "B", "C", "D"],
-        "category_names_zh": CATEGORY_NAMES_ZH,
-        "label_names_zh": LABEL_NAMES_ZH,
+        "category_names_zh": _category_names_zh(),
+        "label_names_zh": _label_names_zh(),
     }

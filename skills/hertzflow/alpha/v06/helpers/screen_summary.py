@@ -27,6 +27,13 @@ skeleton.screen_summary, rendered as `## 0. 一屏结论` at report top.
 All thresholds pre-registered (M35). No LLM input. Single source of
 truth for first-screen narrative.
 
+# i18n (v0.9.x)
+
+All user-facing strings are externalized to lang/<lang>.json via t().
+Each dim builder also carries a language-independent `_state` token so
+downstream logic (_one_sentence / _dim_monitor) branches on state, not
+on translated label text.
+
 # Thresholds (pre-registered)
 
 - 高控盘 op_pct ≥ 70%
@@ -48,7 +55,12 @@ truth for first-screen narrative.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).parent))
+from i18n import t   # v0.9.x i18n
 
 
 def _compute_chip_3way(skel: dict[str, Any]) -> tuple[float, float, float, float]:
@@ -267,28 +279,39 @@ def build_screen_summary(skel: dict[str, Any]) -> dict[str, Any]:
 
 def _dim_phase(chain_state: str, risk: int, sell_pct: float, recent_72h: int,
                net_sellout: float) -> dict:
-    """Dimension 1: 当前阶段 — reuse chain_state 5-tier + augment with net_sellout."""
+    """Dimension 1: 当前阶段 — reuse chain_state 5-tier + augment with net_sellout.
+
+    `_state` token (stable across langs):
+      DISTRIBUTING / RECENT_UNCONFIRMED / DUMPED / DORMANT / WATCH / CLEAN
+    """
     if chain_state == "RECENT_DISTRIBUTION":
         if sell_pct > 5 or net_sellout > 1_000_000:
-            label = "🔴 派发进行中 / 拉盘中出货"
+            label = t("screen.phase_label_distributing")
+            state = "DISTRIBUTING"
         else:
-            label = "🟠 近期异动 — 尚未确认大额变现"
-        evidence = f"近 72h {recent_72h} 笔大额异动"
+            label = t("screen.phase_label_recent_unconfirmed")
+            state = "RECENT_UNCONFIRMED"
+        evidence = t("screen.phase_ev_recent_anomaly", recent_72h=recent_72h)
         if net_sellout > 0:
-            evidence += f"; 已确认变现 ${net_sellout:,.0f}"
+            evidence += t("screen.phase_ev_confirmed_realized", net_sellout=net_sellout)
     elif chain_state == "OPERATOR_DUMPED":
-        label = "🟢 派完离场 — 历史庄家已离场"
-        evidence = "m6 谱系已派完, 当前无活跃 insider"
+        label = t("screen.phase_label_dumped")
+        state = "DUMPED"
+        evidence = t("screen.phase_ev_dumped")
     elif chain_state == "DORMANT_INSIDER_RISK":
-        label = "🟠 潜伏未派 — 风险未释放"
-        evidence = "潜伏 insider 持仓集中, 时点 不可预测"
+        label = t("screen.phase_label_dormant")
+        state = "DORMANT"
+        evidence = t("screen.phase_ev_dormant")
     elif chain_state == "WATCH":
-        label = "🟡 观察 — 部分异动未触发主信号"
-        evidence = f"近 72h {recent_72h} 笔异动 < 阈值"
+        label = t("screen.phase_label_watch")
+        state = "WATCH"
+        evidence = t("screen.phase_ev_watch", recent_72h=recent_72h)
     else:  # CLEAN
-        label = "🟢 蓄筹 / 观察 — 无显著触发信号"
-        evidence = "尚未触发 5 档主信号"
-    return {"name": "当前阶段", "label": label, "evidence": evidence}
+        label = t("screen.phase_label_clean")
+        state = "CLEAN"
+        evidence = t("screen.phase_ev_clean")
+    return {"name": t("screen.dim_name_phase"), "label": label,
+            "evidence": evidence, "_state": state}
 
 
 def _dim_chip_struct(op_pct: float, cex_pct: float, retail_pct: float) -> dict:
@@ -297,21 +320,25 @@ def _dim_chip_struct(op_pct: float, cex_pct: float, retail_pct: float) -> dict:
     User feedback (velvet_v0872 review 2026-06-13): 每一项后面只要给 %,
     绝对值让用户到下方 "真实派发" 段自己看. Same algorithm as render-side
     top-100 chip classifier (see _compute_chip_3way docstring).
+
+    `_state` token: HIGH / MID / DISPERSED / MISSING
     """
     if op_pct >= 70:
-        label = "🟣 高控盘"
+        label = t("screen.chip_label_high")
+        state = "HIGH"
     elif op_pct >= 40:
-        label = "🟠 中等控盘"
+        label = t("screen.chip_label_mid")
+        state = "MID"
     elif op_pct > 0:
-        label = "🟢 分散"
+        label = t("screen.chip_label_dispersed")
+        state = "DISPERSED"
     else:
-        label = "⚪ 数据缺失"
-    evidence = (
-        f"庄家/项目方可控筹码 {op_pct:.1f}% / "
-        f"交易所中转池 {cex_pct:.1f}% / "
-        f"可验证非庄家方抛压 {retail_pct:.1f}%"
-    )
-    return {"name": "筹码结构", "label": label, "evidence": evidence}
+        label = t("screen.chip_label_missing")
+        state = "MISSING"
+    evidence = t("screen.chip_ev", op_pct=op_pct, cex_pct=cex_pct,
+                 retail_pct=retail_pct)
+    return {"name": t("screen.dim_name_chip"), "label": label,
+            "evidence": evidence, "_state": state}
 
 
 def _dim_insider_dump(op_pct: float, sell_pct: float, fanout_net: float,
@@ -321,42 +348,54 @@ def _dim_insider_dump(op_pct: float, sell_pct: float, fanout_net: float,
     User feedback (velvet_v0872 review 2026-06-13): 原"筹码结构"label 让位给
     3 桶版, 这里仍显示 insider 已变现 + 交易所提币分发 (cex_fanout) 净 % 流通,
     但 name 改成更准确的"内幕/庄家现货套现情况" + 所有英文术语翻译成中文.
+
+    `_state` token: HEAVY / PARTIAL / LIGHT / NONE
     """
     fanout_pct = (fanout_net / circ * 100) if circ else 0
     if sell_pct >= 20 or fanout_pct >= 30:
-        label = "🔴 已大量套现"
+        label = t("screen.insider_label_heavy")
+        state = "HEAVY"
     elif sell_pct >= 5 or fanout_pct >= 10:
-        label = "🟠 部分套现"
+        label = t("screen.insider_label_partial")
+        state = "PARTIAL"
     elif sell_pct > 0 or fanout_pct > 0:
-        label = "🟡 少量套现"
+        label = t("screen.insider_label_light")
+        state = "LIGHT"
     else:
-        label = "🟢 暂未套现"
-    evidence = (
-        f"已确认内幕变现 {sell_pct:.1f}% 流通 + "
-        f"交易所提币分发净 {fanout_pct:.1f}% 流通"
-    )
-    return {"name": "内幕/庄家现货套现情况", "label": label, "evidence": evidence}
+        label = t("screen.insider_label_none")
+        state = "NONE"
+    evidence = t("screen.insider_ev", sell_pct=sell_pct, fanout_pct=fanout_pct)
+    return {"name": t("screen.dim_name_insider"), "label": label,
+            "evidence": evidence, "_state": state}
 
 
 def _dim_volume(wash_dominated: bool, wash_swap_count: int, top_seller_swaps: int,
                 wash_top_bot_share: float) -> dict:
-    """Dimension 4: 成交质量 — wash share. v0.8.7.3: bot → 机器人 中文化."""
+    """Dimension 4: 成交质量 — wash share. v0.8.7.3: bot → 机器人 中文化.
+
+    `_state` token: WASH_DOMINATED / PARTIAL_WASH / REAL / NO_DATA
+    """
     if wash_dominated or wash_top_bot_share > 0.10:
-        label = "🔴 24h 成交不可信 — 对敲机器人主导"
-        evidence = (f"{wash_swap_count:,} 笔链上撮合, "
-                    f"单机器人占 {wash_top_bot_share*100:.1f}%")
+        label = t("screen.volume_label_wash_dominated")
+        state = "WASH_DOMINATED"
+        evidence = t("screen.volume_ev_full", wash_swap_count=wash_swap_count,
+                     bot_share=wash_top_bot_share * 100)
     elif wash_top_bot_share > 0.05:
-        label = "🟠 部分对敲 — 真实承接需折扣"
-        evidence = (f"{wash_swap_count:,} 笔撮合, "
-                    f"单机器人 {wash_top_bot_share*100:.1f}%")
+        label = t("screen.volume_label_partial_wash")
+        state = "PARTIAL_WASH"
+        evidence = t("screen.volume_ev_short", wash_swap_count=wash_swap_count,
+                     bot_share=wash_top_bot_share * 100)
     elif wash_swap_count > 0:
-        label = "🟢 成交相对真实"
-        evidence = (f"{wash_swap_count:,} 笔撮合, "
-                    f"单机器人 {wash_top_bot_share*100:.1f}%")
+        label = t("screen.volume_label_real")
+        state = "REAL"
+        evidence = t("screen.volume_ev_short", wash_swap_count=wash_swap_count,
+                     bot_share=wash_top_bot_share * 100)
     else:
-        label = "⚪ 无成交数据"
-        evidence = "真实派发段未捕获链上撮合"
-    return {"name": "成交质量", "label": label, "evidence": evidence}
+        label = t("screen.volume_label_no_data")
+        state = "NO_DATA"
+        evidence = t("screen.volume_ev_no_data")
+    return {"name": t("screen.dim_name_volume"), "label": label,
+            "evidence": evidence, "_state": state}
 
 
 def _dim_supply(n_mint_auth: int, mint_pct_supply: float, ht_throughput_pct: float,
@@ -365,77 +404,90 @@ def _dim_supply(n_mint_auth: int, mint_pct_supply: float, ht_throughput_pct: flo
 
     v0.8.7.3: ht_dumper → 高频清仓钱包, mint authority → 铸币权限, bridge → 跨链桥
     全中文化.
+
+    `_state` token: MINT_HIGH / MINT_LIMITED / HT_SHOWN / NONE
     """
     if n_mint_auth > 0 and mint_pct_supply > 20:
-        label = "🔴 仍有铸币/跨链桥供应源"
-        evidence = (f"{n_mint_auth} 个铸币权限合约, "
-                    f"累计铸造占总供应 {mint_pct_supply:.1f}%")
+        label = t("screen.supply_label_mint_high")
+        state = "MINT_HIGH"
+        evidence = t("screen.supply_ev_mint_high", n_mint_auth=n_mint_auth,
+                     mint_pct_supply=mint_pct_supply)
     elif n_mint_auth > 0:
-        label = "🟠 存在供应源 — 量级有限"
-        evidence = (f"{n_mint_auth} 个铸币权限, "
-                    f"累计 {mint_pct_supply:.1f}% 总供应")
+        label = t("screen.supply_label_mint_limited")
+        state = "MINT_LIMITED"
+        evidence = t("screen.supply_ev_mint_limited", n_mint_auth=n_mint_auth,
+                     mint_pct_supply=mint_pct_supply)
     elif n_ht > 50 and ht_throughput_pct > 50:
-        label = "🟠 高频清仓已显现 — 但无新铸币源"
-        evidence = (f"{n_ht} 个高频清仓钱包, "
-                    f"累计过账 {ht_throughput_pct:.0f}% 流通")
+        label = t("screen.supply_label_ht_shown")
+        state = "HT_SHOWN"
+        evidence = t("screen.supply_ev_ht_shown", n_ht=n_ht,
+                     ht_throughput_pct=ht_throughput_pct)
     else:
-        label = "🟢 无显著供应风险"
-        evidence = "无铸币权限 / 高频清仓过账量低"
-    return {"name": "供应风险", "label": label, "evidence": evidence}
+        label = t("screen.supply_label_none")
+        state = "NONE"
+        evidence = t("screen.supply_ev_none")
+    return {"name": t("screen.dim_name_supply"), "label": label,
+            "evidence": evidence, "_state": state}
 
 
 def _dim_market(mcap: float, lp_usd: float, vol_24h: float, depth_5pct: float,
                 price_change_24h: float) -> dict:
-    """Dimension 5: 盘口阶段 — mcap + LP + price + depth."""
+    """Dimension 5: 盘口阶段 — mcap + LP + price + depth.
+
+    `_state` token captures mcap tier + thin + price move so _one_sentence
+    can branch without substring-matching the translated label.
+    """
     lp_mcap_ratio = (lp_usd / mcap) if mcap else 0
     vol_lp_ratio = (vol_24h / lp_usd) if lp_usd else 0
     parts = []
     if mcap >= 1_000_000_000:
-        mcap_label = "高市值"
-        parts.append(f"mcap ${mcap/1e6:,.0f}M")
+        parts.append(t("screen.market_ev_mcap_m", mcap_m=mcap / 1e6))
     elif mcap >= 100_000_000:
-        mcap_label = "中市值"
-        parts.append(f"mcap ${mcap/1e6:,.0f}M")
+        parts.append(t("screen.market_ev_mcap_m", mcap_m=mcap / 1e6))
     elif mcap > 0:
-        mcap_label = "低市值"
-        parts.append(f"mcap ${mcap/1e6:,.1f}M")
-    else:
-        mcap_label = "市值未知"
+        parts.append(t("screen.market_ev_mcap_m1", mcap_m=mcap / 1e6))
     if depth_5pct > 0:
-        parts.append(f"5% 深度 ${depth_5pct:,.0f}")
+        parts.append(t("screen.market_ev_depth", depth_5pct=depth_5pct))
     if lp_mcap_ratio > 0:
-        parts.append(f"LP/mcap {lp_mcap_ratio:.3f}")
+        parts.append(t("screen.market_ev_lp_mcap", lp_mcap_ratio=lp_mcap_ratio))
     if vol_lp_ratio > 0:
-        parts.append(f"vol/LP {vol_lp_ratio:.1f}×")
+        parts.append(t("screen.market_ev_vol_lp", vol_lp_ratio=vol_lp_ratio))
     if price_change_24h > 15:
-        price_label = "拉升中"
+        price_state = "PUMP"
     elif price_change_24h < -10:
-        price_label = "大跌"
+        price_state = "DUMP"
     elif abs(price_change_24h) > 5:
-        price_label = "波动"
+        price_state = "VOLATILE"
     else:
-        price_label = "稳"
-    parts.append(f"24h {price_change_24h:+.1f}%")
+        price_state = "STABLE"
+    parts.append(t("screen.market_ev_24h", price_change_24h=price_change_24h))
 
     thin = lp_mcap_ratio > 0 and lp_mcap_ratio < 0.01
     if mcap >= 1_000_000_000 and thin:
-        label = "🟠 高市值 + 薄承接"
+        label = t("screen.market_label_high_thin")
+        mcap_state = "HIGH"
     elif mcap >= 1_000_000_000:
-        label = "🟡 高市值"
+        label = t("screen.market_label_high")
+        mcap_state = "HIGH"
     elif mcap >= 100_000_000 and thin:
-        label = "🟠 中市值 + 薄承接"
+        label = t("screen.market_label_mid_thin")
+        mcap_state = "MID"
     elif mcap >= 100_000_000:
-        label = "🟢 中市值"
+        label = t("screen.market_label_mid")
+        mcap_state = "MID"
     elif mcap > 0:
-        label = "🟢 低市值"
+        label = t("screen.market_label_low")
+        mcap_state = "LOW"
     else:
-        label = "⚪ 数据缺失"
-    if price_label == "拉升中":
-        label = label + " / 拉升中"
-    elif price_label == "大跌":
-        label = label + " / 大跌"
-    evidence = "; ".join(parts) if parts else "盘口数据缺失"
-    return {"name": "盘口阶段", "label": label, "evidence": evidence}
+        label = t("screen.market_label_missing")
+        mcap_state = "MISSING"
+    if price_state == "PUMP":
+        label = label + t("screen.market_label_suffix_pump")
+    elif price_state == "DUMP":
+        label = label + t("screen.market_label_suffix_dump")
+    evidence = "; ".join(parts) if parts else t("screen.market_ev_missing")
+    return {"name": t("screen.dim_name_market"), "label": label,
+            "evidence": evidence, "_state": mcap_state, "_price_state": price_state}
 
 
 def _dim_monitor(dim_phase: dict, dim_chip: dict, dim_supply: dict,
@@ -447,43 +499,51 @@ def _dim_monitor(dim_phase: dict, dim_chip: dict, dim_supply: dict,
     hub + recipients → 交易所提币分发集散方 + 接收方, ht_dumper → 高频清仓钱包,
     detector → 检测器, cluster → 集群.
     """
+    phase_state = dim_phase.get("_state")
     items = []
-    if "派发进行中" in dim_phase["label"] or "近期异动" in dim_phase["label"]:
-        items.append("近 72h 异动地址")
+    if phase_state in ("DISTRIBUTING", "RECENT_UNCONFIRMED"):
+        items.append(t("screen.monitor_item_recent_anomaly"))
     if n_mint_auth > 0:
-        items.append("铸币权限合约")
+        items.append(t("screen.monitor_item_mint_auth"))
     if fanout_recipients > 5:
-        items.append("交易所提币分发集散方 + 接收方")
+        items.append(t("screen.monitor_item_cex_fanout"))
     if n_ht > 50:
-        items.append("高频清仓钱包")
-    if "派完离场" in dim_phase["label"]:
-        items.append("看是否有新派发周期 (新铸币 / 新集群 出现)")
+        items.append(t("screen.monitor_item_ht"))
+    if phase_state == "DUMPED":
+        items.append(t("screen.monitor_item_new_cycle"))
     if not items:
-        items.append("现有检测器未触发主信号, 维持基础监控")
+        items.append(t("screen.monitor_item_default"))
 
-    label = "盯继续派发路径" if "派发" in dim_phase["label"] else "维持基础监控"
-    evidence = "、".join(items)
-    return {"name": "监控重点", "label": label, "evidence": evidence}
+    # NOTE: original matched substring "派发" in the phase label, which only
+    # the DISTRIBUTING label ("派发进行中") contains. Preserve exactly.
+    label = (t("screen.monitor_label_track_dump")
+             if phase_state == "DISTRIBUTING"
+             else t("screen.monitor_label_baseline"))
+    evidence = t("screen.monitor_item_sep").join(items)
+    return {"name": t("screen.dim_name_monitor"), "label": label,
+            "evidence": evidence, "_state": phase_state}
 
 
 def _one_sentence(dim_phase: dict, dim_chip: dict, dim_volume: dict,
                   dim_supply: dict, dim_market: dict) -> str:
-    """Deterministic 1-sentence summary."""
+    """Deterministic 1-sentence summary.
+
+    Branches on language-independent `_state` tokens (not translated label
+    substrings), so it produces correct output in zh and en.
+    """
     parts = []
-    parts.append(dim_phase["label"].split(" — ")[0].replace("🔴 ", "")
-                 .replace("🟠 ", "").replace("🟢 ", "").replace("🟡 ", "")
-                 .replace("⚪ ", "").replace("🟣 ", ""))
-    chip = dim_chip["label"].split(" — ")[0]
-    for emoji in ["🟣 ", "🟠 ", "🟢 ", "🟡 ", "⚪ "]:
-        chip = chip.replace(emoji, "")
-    parts.append(chip)
-    if "不可信" in dim_volume["label"] or "wash" in dim_volume["label"].lower():
-        parts.append("成交被 wash 放大")
-    if "高" in dim_supply["label"]:
-        parts.append("仍有供应源")
-    if "高市值" in dim_market["label"]:
-        parts.append("已在高位")
-    return " + ".join(parts) + "."
+    parts.append(t(f"screen.one_sentence_phase.{dim_phase.get('_state')}"))
+    parts.append(t(f"screen.one_sentence_chip.{dim_chip.get('_state')}"))
+    if dim_volume.get("_state") == "WASH_DOMINATED":
+        parts.append(t("screen.one_sentence_wash"))
+    # NOTE: original logic matched substring "高" in the supply label, which
+    # (quirk) only the HT_SHOWN label ("高频清仓已显现") contains — NOT the
+    # mint-high label. Preserve that exact behavior via the state token.
+    if dim_supply.get("_state") == "HT_SHOWN":
+        parts.append(t("screen.one_sentence_supply"))
+    if dim_market.get("_state") == "HIGH":
+        parts.append(t("screen.one_sentence_high_mcap"))
+    return t("screen.one_sentence_join").join(parts) + t("screen.one_sentence_period")
 
 
 __all__ = ["build_screen_summary"]

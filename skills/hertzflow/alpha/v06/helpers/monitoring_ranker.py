@@ -50,6 +50,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from i18n import t   # v0.6.2 i18n
+
 # ----------------------------------------------------------------------
 # Role base scores. Higher = more "this address moving is signal".
 # Negative = NOT_TRACKED hard (infra / public CEX — they always move,
@@ -453,29 +455,31 @@ def _level_from_score(score: int) -> str:
 
 # v0.7.27.1 codex HIGH fix: rephrase to avoid banned words (持有/卖出/派/
 # 进出/卖家/减仓/加仓). All 链上侦测-neutral facts about chain state.
+# v0.6.2 i18n: values are i18n keys, resolved via t() at lookup time (after
+# the pipeline / caller has set the active lang).
 _REASON_ZH = {
-    "mint_authority": "可持续 mint 供应源, 任一笔转出 / 新 mint 都改变 链上侦测 判断",
-    "bridge_contract": "跨链桥 / staking / 挖矿 合约, 自身链上流出立刻形成 出货 路径",
-    "cex_fanout_hub": "从 CEX 提币后拆筹码到多个 子钱包 的中转 集散, 控筹核心",
+    "mint_authority": "mon.reason_mint_authority",
+    "bridge_contract": "mon.reason_bridge_contract",
+    "cex_fanout_hub": "mon.reason_cex_fanout_hub",
     # v0.8.2 新加 (v0.8.2.2 codex audit MED #4 fix: 去掉 bare English
     # `mint` / `allocation` / implementation name `fake_mining_detector`,
     # 改用中文术语).
-    "suspected_operator_reserve": "启发式抓出的隐藏庄家弹药 (大额 ≥10% 流通 + 无 Arkham 标), 极可能项目方储备 / 场外接货 / 做市仓储. 一旦开始拆散到多个地址 / 转入交易所 / 链上撮合, 是项目方启动派发的强信号",
-    "fake_mining_cluster_member": "伪矿币铸币集群成员 (铸币权限合约 → 少数大额账户 模式, 不是真矿工). 项目方控制的份额接收集群, 任何转出都视为庄家动作",
-    "direct_dumper": "已在 DEX swap 或 CEX 充值地址观察到链上确认流出的 内幕 钱包",
-    "deployer": "项目方部署 / 内幕分发钱包, 余额变化跟项目方动作直接关联",
-    "treasury_vesting": "vesting / treasury / 多签, 解锁或主动转出是已知抛压时点",
-    "high_throughput_operator": "历史高频清仓 庄家, 重新接币 = 新一轮分发开始",
-    "fanout_recipient": "大规模分发 集散 的接收钱包, 同步转 DEX / CEX = 出货阶段开始",
-    "anomaly_participant": "近 72h 异常大单的链上参与方, 当下正在动",
-    "cross_alpha_active_operator": "在 5+ Alpha 币上高频 tx 的 庄家, 跨币操盘",
-    "cross_alpha_inactive_whale": "跨多币余额命中但近期不活跃, 大额变动需要监控",
-    "cex_deposit_destination": "多个 内幕 转入的 CEX 充值地址",
-    "unknown_top_holder": "未识别 顶 余额钱包, 余额变化反映散户 vs 内幕集中度",
-    "dex_pool": "DEX 主池本身, LP 大幅变动反映流动性事件",
-    "router_aggregator": "DEX 路由 / 聚合器, 每天百万次 tx, 监控无意义",
-    "public_cex_hot_钱包": "公共 CEX 热钱包, 流量噪音淹没真信号",
-    "other": "未分类钱包, 默认仅做证据保留, 不主动监控",
+    "suspected_operator_reserve": "mon.reason_suspected_operator_reserve",
+    "fake_mining_cluster_member": "mon.reason_fake_mining_cluster_member",
+    "direct_dumper": "mon.reason_direct_dumper",
+    "deployer": "mon.reason_deployer",
+    "treasury_vesting": "mon.reason_treasury_vesting",
+    "high_throughput_operator": "mon.reason_high_throughput_operator",
+    "fanout_recipient": "mon.reason_fanout_recipient",
+    "anomaly_participant": "mon.reason_anomaly_participant",
+    "cross_alpha_active_operator": "mon.reason_cross_alpha_active_operator",
+    "cross_alpha_inactive_whale": "mon.reason_cross_alpha_inactive_whale",
+    "cex_deposit_destination": "mon.reason_cex_deposit_destination",
+    "unknown_top_holder": "mon.reason_unknown_top_holder",
+    "dex_pool": "mon.reason_dex_pool",
+    "router_aggregator": "mon.reason_router_aggregator",
+    "public_cex_hot_wallet": "mon.reason_public_cex_hot_wallet",
+    "other": "mon.reason_other",
 }
 
 # v0.8.2: trigger_summary per role — forensic descriptors (NOT alerts).
@@ -485,21 +489,10 @@ _REASON_ZH = {
 # it. The user reads chain activity in their own wallet tracker
 # (Binance / OKX bulk import via paste.json), then cross-references
 # with the 真实派发段 of the same report to estimate USD realized.
+# v0.6.2 i18n: values are i18n keys, resolved via t() at lookup time.
 _TRIGGER_ZH = {
-    "suspected_operator_reserve": (
-        "标记类型: 启发式抓出的隐藏庄家弹药 (≥ 10% 流通 + 无 Arkham 标记). "
-        "用户可关注以下三类链上行为是否已发生 / 何时发生: "
-        "(1) 拆散到多个下游账户, (2) 转入 Arkham 标的交易所充值地址, "
-        "(3) 链上撮合 (直接转出对 USDT/BNB/WBNB 等). 如果出现 (2)(3), "
-        "结合本报告真实派发段的内幕自卖 TWAP 可估算实际变现 USD."
-    ),
-    "fake_mining_cluster_member": (
-        "标记类型: 伪矿币铸币集群成员 (铸币权限合约 → 少量大额账户). "
-        "用户可关注以下三类链上行为是否已发生 / 何时发生: "
-        "(1) 接币后转入交易所充值地址, (2) 链上撮合, "
-        "(3) 拆散到下游子账户. 如果出现 (1)(2), 结合本报告真实派发段"
-        "估算铸币份额的实际变现."
-    ),
+    "suspected_operator_reserve": "mon.trigger_suspected_operator_reserve",
+    "fake_mining_cluster_member": "mon.trigger_fake_mining_cluster_member",
 }
 
 
@@ -535,23 +528,23 @@ def annotate_monitoring_wallets(skel: dict) -> list[dict]:
         score = _score(role_enum, balance_pct, flow_pct, a72, a7, a60, source_behaviors)
         level = _level_from_score(score)
         # 5) Reason + trigger summary
-        reason = _REASON_ZH.get(role_enum, _REASON_ZH["other"])
+        reason = t(_REASON_ZH.get(role_enum, _REASON_ZH["other"]))
         # v0.8.2: heuristic-derived hidden operator roles get their own
         # neutral trigger descriptor; other roles fall back to the
         # level-based descriptor.
         if role_enum in _TRIGGER_ZH:
-            trigger = _TRIGGER_ZH[role_enum]
+            trigger = t(_TRIGGER_ZH[role_enum])
         elif level == "CRITICAL":
-            trigger = f"链上行为参考: 余额变动 / 接币 / 转出 — 关联行为标签 {','.join(source_behaviors) or '无'}"
+            trigger = t("mon.trigger_critical", behaviors=",".join(source_behaviors) or t("mon.behaviors_none"))
         elif level == "HIGH":
             # v0.8.0.3: use ≥ instead of > so md_cell HTML-escape doesn't
             # convert to &gt; in render output ("DEX 路由" is the
             # translation regression — restored to "DEX 路由" once).
-            trigger = "链上行为参考: 大额 (≥ $10k) 转入 DEX 路由 / CEX 充值地址"
+            trigger = t("mon.trigger_high")
         elif level == "NORMAL":
-            trigger = "批量列出供交叉核对, 优先级低"
+            trigger = t("mon.trigger_normal")
         else:
-            trigger = "不导出到 paste.json (基础设施 / 公共钱包流量过高)"
+            trigger = t("mon.trigger_not_tracked")
 
         # 6) Annotate
         w["monitor_level"] = level

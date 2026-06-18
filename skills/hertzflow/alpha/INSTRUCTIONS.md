@@ -370,6 +370,30 @@ calling out before you blame the pipeline:
    `BINANCE_ALPHA_WASH_INFRA_MAX_SECONDS` env (默认 300s) 控制. ARM
    模拟下每条 surf SQL 慢 2-3 倍, 建议调到 600-900s 而不是直接杀进程.
 
+## Report language — MANDATORY, derive from the user's input language
+
+> **This is the bridge the agent MUST close: the report body language is a
+> SEPARATE i18n system from the `onboarding_i18n` prompt strings, and it
+> does NOT auto-detect.** The pipeline owns the report-body locale via
+> `forensic_pipeline.py --lang {zh|en}` (equivalently the
+> `BINANCE_ALPHA_LANG` env var). **Both default to `zh`.** A full `en.json`
+> language pack ships and is at parity with `zh.json` — but nothing in the
+> pipeline inspects the user's message, so if you don't pass `--lang`, every
+> report comes out Chinese regardless of what language the user wrote in.
+
+**Rule (same locale logic as `onboarding_i18n`): before running the
+pipeline, pick `--lang` from the user's most recent message:**
+
+- Message contains CJK characters (`一-鿿` etc.) → `--lang zh`
+- Otherwise (English / Latin-script) → `--lang en`
+
+Locked report-body strings are baked into the skeleton at pipeline time, so
+**the language cannot be changed at render or fill time** — it must be set on
+the `forensic_pipeline.py` call. Authoring narrative fills in step 2 must
+match the chosen `--lang` (English narrative for `--lang en`). Getting this
+wrong means a full pipeline re-run (re-spends Surf credits), so set it once,
+up front.
+
 ## Quick start (3 commands)
 
 ```bash
@@ -377,12 +401,17 @@ calling out before you blame the pipeline:
 # installed skill (~/.claude/skills/hertzflow/alpha/). Run them from
 # there, or prefix with the absolute install path.
 
+# 0. Pick LANG from the user's most recent message (see rule above):
+#    CJK chars → zh, otherwise → en.
+LANG_FLAG=en   # or zh
+
 # 1. Pipeline — produces skeleton + initial monitoring_wallets export
-python3 v06/forensic_pipeline.py "$CA_LOWER" --out /tmp/skeleton.json
+python3 v06/forensic_pipeline.py "$CA_LOWER" --lang "$LANG_FLAG" --out /tmp/skeleton.json
 
 # 2. LLM fills writable slots (see "LLM fill guide" below)
 #    Read /tmp/skeleton.json, replace every "<LLM_NARRATIVE_PLACEHOLDER>"
-#    with a real narrative string, write to /tmp/filled.json.
+#    with a real narrative string IN THE SAME LANGUAGE as --lang,
+#    write to /tmp/filled.json.
 
 # 3. Render — validator runs in-process first; render aborts on any error
 #    Also re-emits monitoring_wallets/* with LLM-filled alert text

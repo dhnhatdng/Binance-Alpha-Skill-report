@@ -382,7 +382,7 @@ def run(
     deployer_node_ref: str | None = None
     if deployer:
         deployer_node_ref = eg.add_node(
-            type="deployer", addr=deployer, label_hint="项目方钱包 (分发追溯起点)",
+            type="deployer", addr=deployer, label_hint=t("role.DEPLOYER.label_with_hint"),
         )
         flowchart_nodes.append({
             "node_ref": deployer_node_ref,
@@ -394,7 +394,7 @@ def run(
     pool_node_ref: str | None = None
     if dex_pool_addr:
         pool_node_ref = eg.add_node(
-            type="lp_pool", addr=dex_pool_addr, label_hint="DEX 主池",
+            type="lp_pool", addr=dex_pool_addr, label_hint=t("role.DEX_POOL.label"),
         )
         flowchart_nodes.append({
             "node_ref": pool_node_ref,
@@ -434,7 +434,7 @@ def run(
         nref = eg.add_node(
             type=ntype, addr=addr,
             balance=r.get("current_balance"),
-            label_hint=f"内幕接收方, 已分 {dumped:.0f}%",
+            label_hint=t("sec1.lineage.label_hint_receiver", dumped=dumped),
         )
         receiver_node_refs[_norm_addr(addr)] = nref
         addr_to_node_ref[_norm_addr(addr)] = nref
@@ -474,7 +474,7 @@ def run(
             if to_ref is None:
                 to_ref = eg.add_node(
                     type="retail_fanout", addr=to_addr,
-                    label_hint=f"分发下游 (来自 {dumper_addr[:10]}…)",
+                    label_hint=t("sec1.lineage.label_hint_fanout", dumper_short=dumper_addr[:10]),
                 )
                 addr_to_node_ref[to_key] = to_ref
                 flowchart_nodes.append({
@@ -539,7 +539,7 @@ def run(
                 type="dumper",
                 addr=addr,
                 balance=(member.get("balance") if member else None),
-                label_hint=f"Operator relay (持 {pct:.2f}% 总供应), 经多跳分发到达",
+                label_hint=t("sec1.lineage.label_hint_operator_relay", pct=pct),
             )
             addr_to_node_ref[addr] = new_ref
             flowchart_nodes.append({

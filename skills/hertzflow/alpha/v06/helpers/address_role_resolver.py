@@ -30,6 +30,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from i18n import t   # v0.6.2 i18n
+
 # ----------------------------------------------------------------------
 # Role priority — highest priority FIRST. When an address appears under
 # multiple roles, primary_role = the one earliest in this list.
@@ -65,62 +67,65 @@ ROLE_PRIORITY = [
 # vary across renderers and break on Chinese/emoji/parens.
 # v0.7.28.1 codex HIGH fix: rename labels to avoid banned words
 # ("派" in "真实派发", "进场" in "进场上限"). 链上侦测-neutral.
+# v0.6.2 i18n: `label_key` holds an i18n key; the user-facing label is
+# resolved via t() at build time (after the pipeline calls set_lang), so
+# the same SECTION_INFO produces zh or en labels per active language.
 SECTION_INFO = {
     "mint_authority": {
         "anchor": "section-bridge-mint",
-        "label_zh": "🌉 跨链桥 / 铸币权限合约 自卖明细",
+        "label_key": "addr_role.section_label.mint_authority",
     },
     "cex_fanout_hub": {
         "anchor": "section-cex-fanout",
-        "label_zh": "🎯 CEX 提币 大规模分发 控筹",
+        "label_key": "addr_role.section_label.cex_fanout_hub",
     },
     "fanout_recipient": {
         "anchor": "section-cex-fanout",
-        "label_zh": "🎯 CEX 提币 大规模分发 控筹 (接收钱包)",
+        "label_key": "addr_role.section_label.fanout_recipient",
     },
     "direct_dumper": {
         "anchor": "section-real-distribution",
-        "label_zh": "🔴 真实分发段 (内幕 确认流出)",
+        "label_key": "addr_role.section_label.direct_dumper",
     },
     "high_throughput_operator": {
         "anchor": "section-high-throughput",
-        "label_zh": "🌊 高频出货钱包",
+        "label_key": "addr_role.section_label.high_throughput_operator",
     },
     "anomaly_participant": {
         "anchor": "section-recent-anomaly",
-        "label_zh": "📊 近 72h 异常活动",
+        "label_key": "addr_role.section_label.anomaly_participant",
     },
     "cross_alpha_whale": {
         "anchor": "section-cross-sym",
-        "label_zh": "🐋 跨币大户",
+        "label_key": "addr_role.section_label.cross_alpha_whale",
     },
     "deployer": {
         "anchor": "section-alloc",
-        "label_zh": "项目方话语权",
+        "label_key": "section.alloc.title",
     },
     "treasury_vesting": {
         "anchor": "section-alloc",
-        "label_zh": "项目方话语权",
+        "label_key": "section.alloc.title",
     },
     "dex_pool": {
         "anchor": "section-liq",
-        "label_zh": "🔵 LP 深度段",
+        "label_key": "addr_role.section_label.dex_pool",
     },
     "router_aggregator": {
         "anchor": "section-monitoring",
-        "label_zh": "📌 监控钱包",
+        "label_key": "addr_role.section_label.monitoring",
     },
     "public_cex_hot_wallet": {
         "anchor": "section-monitoring",
-        "label_zh": "📌 监控钱包",
+        "label_key": "addr_role.section_label.monitoring",
     },
     "unknown_top_holder": {
         "anchor": "section-holdings",
-        "label_zh": "各角色余额分布",
+        "label_key": "addr_role.section_label.unknown_top_holder",
     },
     "other": {
         "anchor": "section-monitoring",
-        "label_zh": "📌 监控钱包",
+        "label_key": "addr_role.section_label.monitoring",
     },
 }
 
@@ -273,7 +278,7 @@ def build_address_role_index(skel: dict) -> dict[str, dict]:
             "primary_role": primary,
             "all_roles": roles,
             "primary_section_anchor": info["anchor"],
-            "primary_section_label_zh": info["label_zh"],
+            "primary_section_label_zh": t(info["label_key"]),
             "addr_short": addr[:10] if addr.startswith("0x") else addr[:8],
         }
     return index
