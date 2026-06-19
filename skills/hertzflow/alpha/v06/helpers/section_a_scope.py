@@ -75,8 +75,14 @@ _SURF_HOLDER_CHAINS = {
     "arbitrum-one": "arbitrum",
     "polygon-pos": "polygon",
     "optimistic-ethereum": "optimism",
-    "avalanche": "avalanche",
     "solana": "solana",
+    # NOTE: every short-name value here MUST be routable by
+    # chain_router.set_active_chain (i.e. in chain_router._VALID_PREFIXES).
+    # `derive_primary_chain` gates `alpha_chain_authoritative` on this dict,
+    # so any chain present here but NOT in chain_router would make
+    # primary_chain diverge from the SQL routing chain (codex v1.0.1 HIGH:
+    # 'avalanche'/43114 was listed here but unsupported by the router →
+    # removed). test_surf_holder_chains_subset_of_router enforces this.
 }
 
 # v0.7.9 (kept for back-compat with any direct importers): EVM-only
@@ -254,7 +260,9 @@ _CHAIN_ID_TO_CG_PLATFORM = {
     "8453": "base",
     "42161": "arbitrum-one",
     "10": "optimistic-ethereum",
-    "43114": "avalanche",
+    # v1.0.1: 43114→avalanche removed — avalanche is NOT routable by
+    # chain_router.set_active_chain, so mapping it here would let
+    # derive_primary_chain return a chain the SQL path can't use.
     # v0.7.21.7: Solana mapping for derive_primary_chain so the primary-chain
     # derivation can honour Alpha's CT_501 instead of falling back to BSC.
     "CT_501": "solana",
@@ -962,21 +970,21 @@ def derive_primary_chain(
          能从剩余链选出一个 lp_usd_max → 标 `lp_usd_max_unreliable_<chain>`.
          (Banner 警告用户 fetch 失败.)
       2. surf-supported 链有 >0 LP USD → 选 lp_usd 最大的 (`lp_usd_max`).
-      3. **v0.7.21.5: surf-supported 全 0 LP 时 — Alpha API 报的 chain
-         始终优先**, 不管是否存在 non-surf 平台. OLAS 案例触发: OLAS 在
-         9 条链上有 wrapper, surf 拉不到 LP USD (lp_usd 全 None), pre-
-         v0.7.21.5 走 step 3 选 `non_surf_chains[0]` 字母序最早 (=
-         "celo"), 忽略了 Alpha API 的 chainId=1 (Ethereum). 但 chain_
-         router 已经 set_active_chain(1) → ethereum 跑 SQL, 所以 forensic
-         数据正确, 只是 metadata `primary_chain="celo"` 误导用户. 修复:
-         (3a) Alpha chainId 映射到 CoinGecko platform → 优先选, 标
-              `lp_zero_fallback_alpha_chain`.
-         (3b) Alpha chainId 缺/未映射 + 存在 non-surf 链 → 选第一个
-              non-surf, 标 `non_surf_inferred`.
-         (3c) Alpha chainId 缺/未映射 + 全 surf-supported → 走 step 4.
-      4. 只有 surf-supported 链但全 0 LP 且无 Alpha chain 提示 → fallback
-         BSC, 标 `lp_zero_fallback_bsc_unknown_alpha_chain`.
-      5. 完全无 platforms → `no_platforms`.
+      3. surf-supported 全 0 LP 时 (primary_chain 路由 holder/cluster/CEX
+         的 token-holders 查询, skill 只能查 surf-supported 链, **绝不能落
+         到 non-surf 链**):
+         (3a) Alpha chainId 的 CoinGecko platform 在 chain_lp 里 → 选它,
+              标 `lp_zero_fallback_alpha_chain`.
+         (3b) **v1.0.1 (H): Alpha chainId 映射到 surf-supported 链 (即使不
+              在 chain_lp dict 里) → 选它, 标 `alpha_chain_surf_supported`.**
+         (3c) **v1.0.1: chain_lp 里有任意 surf-supported 链 → 选它 (哪怕 0
+              LP), 标 `surf_supported_fallback`. 取代旧的 `non_surf_inferred`
+              (那个会把 hyperliquid/celo 当 primary → holder SQL 路由到查不
+              了的分区 → 筹码三桶 0%).**
+         (3d) **v1.0.1: 完全没 surf-supported 链 → fallback BSC, 标
+              `no_surf_chain_bsc_fallback`. 绝不返回 non-surf 链.**
+      4. 完全无 platforms → `no_platforms` (Alpha chainId surf-supported
+         时已在 3b 兜住).
     """
     # Detect fetch errors first — these change derivation confidence.
     failed_chains = sorted(
@@ -984,6 +992,36 @@ def derive_primary_chain(
         if v.get("_error") and v.get("surf_supported")
     )
 
+    # v1.0.1 (H 2026-06-18 + codex HIGH): the Alpha-API chainId is the
+    # AUTHORITATIVE routing key. SQL detectors already route by
+    # `set_active_chain(chain_id)`; `primary_chain` routes the holder /
+    # wallet-cluster / CEX-label token-holders queries. The two MUST agree
+    # — so whenever the Alpha chainId maps to a surf-supported chain, that
+    # chain wins OUTRIGHT, regardless of LP on other chains and regardless
+    # of whether it's a key in the CoinGecko-derived chain_lp dict.
+    #
+    #   * H (zero-LP, non-surf CG platforms): ETH token, chainId=1, CG
+    #     listed only hyperliquid + hyperevm. Old code fell to
+    #     `non_surf_inferred` = hyperliquid → holder/cluster/CEX SQL hit an
+    #     unqueryable partition → 筹码三桶 0%.
+    #   * codex HIGH (positive-LP split): a Base token (chainId=8453) with a
+    #     bigger ETH wrapper LP — old `lp_usd_max` picked ethereum, so SQL
+    #     ran on Base while holders ran on Ethereum = incoherent report.
+    #
+    # The skill can only query surf-supported chains (BSC / ETH / ARB / BASE
+    # / Polygon / Optimism / Solana); a non-surf chain as primary_chain is
+    # always a dead end. LP-max is now only a tiebreaker
+    # for the rare case where the Alpha chainId is missing / unmapped.
+    alpha_platform = _CHAIN_ID_TO_CG_PLATFORM.get(str(alpha_chain_id or ""))
+    if alpha_platform and alpha_platform in _SURF_HOLDER_CHAINS:
+        if alpha_platform in failed_chains:
+            # Keep the "unreliable_fetch_failed" substring so render_report's
+            # fetch-error banner (which greps for it) fires on this path too.
+            return alpha_platform, f"alpha_chain_authoritative_unreliable_fetch_failed:{alpha_platform}"
+        return alpha_platform, "alpha_chain_authoritative"
+
+    # No usable Alpha chainId hint — fall back to liquidity discovery, but
+    # NEVER to a non-surf chain (the skill can't query it).
     surf_supported = {
         p: v for p, v in chain_lp.items()
         if v.get("surf_supported") and (v.get("lp_usd") or 0) > 0
@@ -994,25 +1032,21 @@ def derive_primary_chain(
             return primary, f"lp_usd_max_unreliable_fetch_failed:{','.join(failed_chains)}"
         return primary, "lp_usd_max"
 
-    # v0.7.21.5: when LP USD is all-zero, Alpha-API chain always wins over
-    # alphabetical pick from non-surf platforms. This stops OLAS-style
-    # "primary=celo" mis-attribution when Alpha actually says chainId=1
-    # (Ethereum). chain_router was already routing SQL correctly via
-    # set_active_chain(chain_id); this fix aligns the metadata.
-    alpha_platform = _CHAIN_ID_TO_CG_PLATFORM.get(str(alpha_chain_id or ""))
-    if alpha_platform and alpha_platform in chain_lp:
-        return alpha_platform, "lp_zero_fallback_alpha_chain"
+    # All-zero LP and no Alpha hint: prefer ANY surf-supported chain present
+    # (at least the holder query can run) over a non-surf pick.
+    surf_present = sorted(
+        p for p, v in chain_lp.items() if v.get("surf_supported")
+    )
+    if surf_present:
+        return surf_present[0], "surf_supported_fallback"
 
-    non_surf_chains = [p for p, v in chain_lp.items() if not v.get("surf_supported")]
-    if non_surf_chains:
-        return non_surf_chains[0], "non_surf_inferred"
-
-    if any(v.get("surf_supported") for v in chain_lp.values()):
-        # v0.7.20: honour Alpha-API chainId instead of hardcoded BSC.
-        alpha_platform = _CHAIN_ID_TO_CG_PLATFORM.get(str(alpha_chain_id or ""))
-        if alpha_platform and alpha_platform in _SURF_HOLDER_CHAINS:
-            return alpha_platform, "lp_zero_fallback_alpha_chain"
-        return "binance-smart-chain", "lp_zero_fallback_bsc_unknown_alpha_chain"
+    # No surf-supported chain anywhere — for an Alpha-listed token this is a
+    # CoinGecko metadata gap (the token IS on a surf chain; CG just didn't
+    # list it). Route to BSC (queryable) so the holder path returns
+    # real-or-empty from a real partition, never a non-surf dead end. The
+    # derivation flag discloses the uncertainty.
+    if chain_lp:
+        return "binance-smart-chain", "no_surf_chain_bsc_fallback"
 
     return None, "no_platforms"
 
