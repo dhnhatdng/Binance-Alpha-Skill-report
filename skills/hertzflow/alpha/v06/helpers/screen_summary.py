@@ -323,13 +323,18 @@ def _dim_chip_struct(op_pct: float, cex_pct: float, retail_pct: float) -> dict:
 
     `_state` token: HIGH / MID / DISPERSED / MISSING
     """
+    # v1.0.2 (H 2026-06-20): MISSING (数据缺失) must mean "no classified holders
+    # at all", NOT "op_pct == 0". A token that is genuinely retail-dominated
+    # (op=0 but cex/retail > 0) is DISPERSED, not data-missing — labelling it
+    # 数据缺失 wrongly implies a pipeline failure. Only all-three-zero (the
+    # classifier read nothing) is truly MISSING.
     if op_pct >= 70:
         label = t("screen.chip_label_high")
         state = "HIGH"
     elif op_pct >= 40:
         label = t("screen.chip_label_mid")
         state = "MID"
-    elif op_pct > 0:
+    elif (op_pct + cex_pct + retail_pct) > 0:
         label = t("screen.chip_label_dispersed")
         state = "DISPERSED"
     else:

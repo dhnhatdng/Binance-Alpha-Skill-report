@@ -959,6 +959,44 @@ def fetch_chain_lp_via_surf(
     return out
 
 
+def _inject_alpha_chain_platform(
+    platforms: dict[str, str] | None, chain_id: str | int | None, ca: str,
+) -> dict[str, str]:
+    """v1.0.2 (H 2026-06-20): guarantee the Alpha-API chain is in the platform
+    map fed to `fetch_chain_lp_via_surf`, even when CoinGecko omits it.
+
+    The pipeline pulls per-chain holders BEFORE picking primary_chain, and the
+    pull is driven by CoinGecko's platform list — NOT by what surf supports nor
+    by the authoritative Alpha chainId. `chain_lp_realtime` is keyed by those
+    CoinGecko platforms, and the chip-structure 3-way classifier (screen_summary
+    `_compute_chip_3way` + render 真实派发 section) reads
+    `chain_lp_realtime[primary_chain].top_holders_classified`.
+
+    H is an ETH token (chainId=1) whose CoinGecko platforms listed only
+    hyperliquid/hyperevm (CG metadata gap) → fetch_chain_lp_via_surf never
+    queried ethereum → no `chain_lp_realtime['ethereum']` → chip 3-way all 0%
+    → 一屏「筹码结构」shows 数据缺失. surf FULLY supports ethereum (a live
+    token-holders call returns 17 classified holders for H's ETH CA); the
+    pipeline simply never asked, because CG didn't list it. The SQL detectors
+    were unaffected — they route by the Alpha chainId, not CoinGecko.
+
+    Injecting the Alpha chain (with the input CA as its address — the token's
+    address on its own listing chain) forces the holder pull to include it.
+    `setdefault` never overrides a genuine CoinGecko entry.
+    """
+    out = dict(platforms or {})
+    alpha_plat = _CHAIN_ID_TO_CG_PLATFORM.get(str(chain_id or ""))
+    if alpha_plat and alpha_plat in _SURF_HOLDER_CHAINS and ca:
+        # codex v1.0.2: inject when the key is MISSING **or blank/None** —
+        # CoinGecko sometimes lists a platform with an empty address, and
+        # `setdefault` would keep that blank → fetch_chain_lp_via_surf skips
+        # empty CAs → the ETH pull is still missed. Only a truthy CoinGecko
+        # address is preserved.
+        if not out.get(alpha_plat):
+            out[alpha_plat] = ca
+    return out
+
+
 def derive_primary_chain(
     chain_lp: dict[str, dict[str, Any]],
     alpha_chain_id: str | None = None,
@@ -1244,6 +1282,11 @@ def run(ca: str) -> dict[str, Any]:
     #   2. `surf token-holders --chain X --include labels` per CoinGecko 平台 →
     #      DEX-labeled holders × price = 实时 LP USD per chain (主战场识别)
     cg = fetch_coingecko_platforms(symbol, ca_lower)
+    # v1.0.2 (H 2026-06-20): ALWAYS fetch the Alpha-API chain's holders, even
+    # when CoinGecko's platform list omits it. See _inject_alpha_chain_platform.
+    cg["platforms"] = _inject_alpha_chain_platform(
+        cg.get("platforms"), chain_id, ca_lower
+    )
     realtime = fetch_realtime_token_info_via_surf(symbol or "", ca_lower, name=name)
     price_usd = realtime.get("price_usd")
     chain_lp = (
