@@ -53,7 +53,18 @@ def _curl_json(url: str, timeout: int = 8) -> dict | None:
 
 # v0.9.8 (BR 2026-06-17 LP bug): chain_router prefix → DexScreener chainId.
 # DexScreener uses its own chain slugs; map the skill's active-chain prefix.
+#
+# v1.0.3 (O 2026-06-20): the pipeline calls fetch_dexscreener_main_pool with
+# `meta.primary_chain`, which is a CoinGecko PLATFORM NAME (binance-smart-chain),
+# NOT a chain_router prefix (bsc). Since v0.9.8 the lookup silently returned
+# None for every chain whose CoinGecko name != its prefix — bsc / arbitrum /
+# polygon / optimism (i.e. MOST Binance Alpha tokens) — so DexScreener LP fell
+# through to the surf-token-holders fallback (no USD) and the report showed LP
+# as 数据缺失 / None. ETH + Base happened to work only because their CoinGecko
+# name == their prefix. We now accept BOTH formats so the lookup can't break on
+# whichever the caller passes.
 _DEXSCREENER_CHAIN_MAP = {
+    # chain_router prefixes
     "bsc": "bsc",
     "ethereum": "ethereum",
     "base": "base",
@@ -62,6 +73,11 @@ _DEXSCREENER_CHAIN_MAP = {
     "optimism": "optimism",
     "avalanche": "avalanche",
     "solana": "solana",
+    # CoinGecko platform names (the primary_chain format the pipeline passes)
+    "binance-smart-chain": "bsc",
+    "arbitrum-one": "arbitrum",
+    "polygon-pos": "polygon",
+    "optimistic-ethereum": "optimism",
 }
 
 
