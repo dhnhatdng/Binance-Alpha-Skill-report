@@ -2352,19 +2352,6 @@ def build_skeleton(
     except Exception as _e:
         import sys as _sys
         print(f"[chain_state_derive] failed (non-fatal): {_e}", file=_sys.stderr)
-    try:
-        from helpers.screen_summary import build_screen_summary as _build_screen_summary
-        skeleton["screen_summary"] = _build_screen_summary(skeleton)
-        import sys as _sys
-        _ss = skeleton["screen_summary"]
-        print(f"[screen_summary] {len(_ss.get('dimensions') or [])} dimensions, "
-              f"one_sentence='{(_ss.get('one_sentence') or '')[:80]}'",
-              file=_sys.stderr)
-    except Exception as _e:
-        import sys as _sys
-        print(f"[screen_summary] failed (non-fatal): {_e}", file=_sys.stderr)
-        skeleton["screen_summary"] = {"_error": str(_e)[:200]}
-
     # ---------- Round 9.5: hidden_operator_enricher (v0.8.2) ----------
     # Append heuristically-flagged hidden operator wallets to
     # monitoring_wallets BEFORE annotate_monitoring_wallets so they get
@@ -2436,6 +2423,32 @@ def build_skeleton(
             "level_counts": {"CRITICAL": 0, "HIGH": 0, "NORMAL": 0, "NOT_TRACKED": 0},
             "_error": str(_e),
         }
+
+    # ---------- Round 10.5: screen_summary (v1.0.4 — moved here) ----------
+    # v1.0.4 (O 2026-06-20): build_screen_summary MUST run AFTER
+    # annotate_monitoring_wallets (Round 10) + hidden_operator_enricher
+    # (Round 9.5). The chip-structure 3-way (screen_summary._compute_chip_3way)
+    # builds its operator union from monitoring_wallets[].monitor_role_enum,
+    # which is ONLY assigned by annotate_monitoring_wallets. Built earlier (the
+    # old Round 9 position), monitor_role_enum was still unset → op_union empty
+    # → 一屏「筹码结构」reported operator 0.0% (假"分散") while the render-side
+    # 真实派发 section — computed at render time, post-annotation — reported the
+    # real operator % (e.g. O: 83.4% 高控盘). Same skeleton, contradictory
+    # headline vs detail. Building here makes the headline use the identical
+    # annotated data the detailed section does. chain_state (its other input)
+    # is set in Round 9 above, so it is available.
+    try:
+        from helpers.screen_summary import build_screen_summary as _build_screen_summary
+        skeleton["screen_summary"] = _build_screen_summary(skeleton)
+        import sys as _sys
+        _ss = skeleton["screen_summary"]
+        print(f"[screen_summary] {len(_ss.get('dimensions') or [])} dimensions, "
+              f"one_sentence='{(_ss.get('one_sentence') or '')[:80]}'",
+              file=_sys.stderr)
+    except Exception as _e:
+        import sys as _sys
+        print(f"[screen_summary] failed (non-fatal): {_e}", file=_sys.stderr)
+        skeleton["screen_summary"] = {"_error": str(_e)[:200]}
 
     # ---------- Round 11: address_role_resolver (v0.7.28) ----------
     # Build address_role_index — every address that appears across

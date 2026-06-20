@@ -79,6 +79,15 @@ def _compute_chip_3way(skel: dict[str, Any]) -> tuple[float, float, float, float
     clp = meta.get("chain_lp_realtime") or {}
     thc = (clp.get(primary_chain) or {}).get("top_holders_classified") or {}
 
+    # v1.0.4 (codex): the operator union below keys on
+    # monitoring_wallets[].monitor_role_enum, assigned by
+    # annotate_monitoring_wallets. If that step FAILED (its try/except records
+    # `monitoring_summary._error`), the roles are absent/partial and op_union
+    # would be falsely empty → a misleading 分散 headline. Degrade to MISSING
+    # (honest 数据缺失) instead of silently under-classifying operators.
+    if ((skel.get("monitoring_summary") or {}).get("_error")):
+        return 0.0, 0.0, 0.0, 0.0
+
     # Build vest_set (vesting + mint_authority — render line 811-834)
     vest_addrs = set()
     for h in (thc.get("vesting") or {}).get("top") or []:
@@ -110,14 +119,39 @@ def _compute_chip_3way(skel: dict[str, Any]) -> tuple[float, float, float, float
         for a in cluster.get("addrs") or []:
             op_union.add(a.lower())
 
+    # v1.0.4 (O 2026-06-20): mirror the render-side tail EXACTLY so the
+    # headline can never diverge from the 真实派发 detail. Build the fanout-
+    # recipient + cluster address sets first, so the top-100 pass can measure
+    # how much of each tail is ALREADY counted in top-100 (the overlap that
+    # render subtracts at render_report.py:937 / :965). Skipping this
+    # (pre-v1.0.4) double-counted fanout/cluster tails on tokens where those
+    # wallets appear in top holders — codex caught it; O has neither so it
+    # only surfaced as a latent parity gap.
+    cfh = (skel.get("funding_attribution") or {}).get("cex_fanout_hubs") or {}
+    fanout_recipient_addrs = set()
+    for h in (cfh.get("hubs") or []):
+        for a in (h.get("_net_structured_recipient_addrs_raw") or []):
+            if a:
+                fanout_recipient_addrs.add(a.lower())
+    cluster_addrs = set()
+    for cluster in (skel.get("wallet_cluster_graph") or {}).get("clusters") or []:
+        for a in (cluster.get("addrs") or []):
+            cluster_addrs.add(a.lower())
+
     # Classify top-100 (vest first → cex by category → operator by union →
-    # retail fallthrough). Render line 857-879.
+    # retail fallthrough). Render line 857-879. Also accumulate fanout/cluster
+    # overlap with top-100 for strict tail subtraction below.
     op_tok = cex_tok = retail_tok = 0.0
+    fanout_overlap = cluster_overlap = 0.0
     for cat in ("vesting", "multisig", "treasury", "airdrop_platform",
                 "cex", "lp", "unclassified"):
         for h in (thc.get(cat) or {}).get("top") or []:
             addr = (h.get("addr") or "").lower()
             bal = float(h.get("balance") or 0)
+            if addr in fanout_recipient_addrs:
+                fanout_overlap += bal
+            if addr in cluster_addrs:
+                cluster_overlap += bal
             if addr in vest_addrs:
                 continue  # vest, skip
             if cat == "cex":
@@ -127,17 +161,19 @@ def _compute_chip_3way(skel: dict[str, Any]) -> tuple[float, float, float, float
             else:
                 retail_tok += bal
 
-    # Tail additions (cex_fanout net + wcg cluster total balance) — render
-    # line 918-964. We skip overlap subtraction here; render does it strictly.
-    cfh = (skel.get("funding_attribution") or {}).get("cex_fanout_hubs") or {}
+    # Tail additions = cluster/fanout balance held OUTSIDE top-100 only
+    # (total minus the in-top-100 overlap already bucketed above). Mirrors
+    # render_report.py:937 (_cex_fanout_tail) + :965 (_cluster_tail).
     fanout_net = float(
         (cfh.get("summary") or {}).get("net_structured_fanout_tokens_total") or 0
     )
-    wcg_total = 0.0
+    fanout_tail = max(0.0, fanout_net - fanout_overlap)
+    cluster_total = 0.0
     for cluster in (skel.get("wallet_cluster_graph") or {}).get("clusters") or []:
-        wcg_total += float(cluster.get("total_balance") or 0)
+        cluster_total += float(cluster.get("cluster_balance_total_tokens") or 0)
+    cluster_tail = max(0.0, cluster_total - cluster_overlap)
 
-    op_with_tail = op_tok + fanout_net + wcg_total
+    op_with_tail = op_tok + fanout_tail + cluster_tail
     implied_circ = op_with_tail + cex_tok + retail_tok
     if implied_circ == 0:
         return 0.0, 0.0, 0.0, 0.0
