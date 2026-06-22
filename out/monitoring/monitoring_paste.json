@@ -1,0 +1,37 @@
+[
+  {
+    "address": "0x500a02a20b0b0a3f3efccfc0559543f5743bd1c4",
+    "name": "O-Heuristi-500a0",
+    "emoji": "\ud83d\udea8",
+    "level": "CRITICAL",
+    "reason": "Heuristically-flagged hidden operator ammo (large \u226510% circulating + no Arkham label); very likely project reserve / OTC absorption / MM warehouse. Once it starts splitting across addresses / depositing to an exchange / matching on-chain, that is a strong signal the project is starting to dump"
+  },
+  {
+    "address": "0x7022c09e1a7fb3823a3ec26585bc7a2b00df8fe5",
+    "name": "O-Heuristi-7022c",
+    "emoji": "\ud83d\udea8",
+    "level": "CRITICAL",
+    "reason": "Heuristically-flagged hidden operator ammo (large \u226510% circulating + no Arkham label); very likely project reserve / OTC absorption / MM warehouse. Once it starts splitting across addresses / depositing to an exchange / matching on-chain, that is a strong signal the project is starting to dump"
+  },
+  {
+    "address": "0x86b50b10561163bee543cb7abe4e4c1564697eb3",
+    "name": "O-Heuristi-86b50",
+    "emoji": "\ud83d\udea8",
+    "level": "CRITICAL",
+    "reason": "Heuristically-flagged hidden operator ammo (large \u226510% circulating + no Arkham label); very likely project reserve / OTC absorption / MM warehouse. Once it starts splitting across addresses / depositing to an exchange / matching on-chain, that is a strong signal the project is starting to dump"
+  },
+  {
+    "address": "0xc8662486e8141a05c38f09f29a8ff47463224685",
+    "name": "O-Heuristi-c8662",
+    "emoji": "\ud83d\udea8",
+    "level": "CRITICAL",
+    "reason": "Heuristically-flagged hidden operator ammo (large \u226510% circulating + no Arkham label); very likely project reserve / OTC absorption / MM warehouse. Once it starts splitting across addresses / depositing to an exchange / matching on-chain, that is a strong signal the project is starting to dump"
+  },
+  {
+    "address": "0xbd1dbe28fa5eaebf6498be090b78f81a5aa8c652",
+    "name": "O-Heuristi-bd1db",
+    "emoji": "\ud83d\udd25",
+    "level": "HIGH",
+    "reason": "Heuristically-flagged hidden operator ammo (large \u226510% circulating + no Arkham label); very likely project reserve / OTC absorption / MM warehouse. Once it starts splitting across addresses / depositing to an exchange / matching on-chain, that is a strong signal the project is starting to dump"
+  }
+]
