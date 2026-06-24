@@ -1,1 +1,44 @@
-[]
+[
+  {
+    "address": "0x05b7721d66e83f8fb236d2ace995f710fd59e718",
+    "name": "BEAT-Heuristi-5b772",
+    "emoji": "\ud83d\udea8",
+    "level": "CRITICAL",
+    "reason": "Heuristically-flagged hidden operator ammo (large \u226510% circulating + no Arkham label); very likely project reserve / OTC absorption / MM warehouse. Once it starts splitting across addresses / depositing to an exchange / matching on-chain, that is a strong signal the project is starting to dump"
+  },
+  {
+    "address": "0x0793b14b0beb04caf55c5fd48e0e3e7358bf6bb2",
+    "name": "BEAT-Heuristi-793b1",
+    "emoji": "\ud83d\udea8",
+    "level": "CRITICAL",
+    "reason": "Heuristically-flagged hidden operator ammo (large \u226510% circulating + no Arkham label); very likely project reserve / OTC absorption / MM warehouse. Once it starts splitting across addresses / depositing to an exchange / matching on-chain, that is a strong signal the project is starting to dump"
+  },
+  {
+    "address": "0x1830834fe3742b7e0988968dd50f321250157561",
+    "name": "BEAT-Heuristi-18308",
+    "emoji": "\ud83d\udea8",
+    "level": "CRITICAL",
+    "reason": "Heuristically-flagged hidden operator ammo (large \u226510% circulating + no Arkham label); very likely project reserve / OTC absorption / MM warehouse. Once it starts splitting across addresses / depositing to an exchange / matching on-chain, that is a strong signal the project is starting to dump"
+  },
+  {
+    "address": "0x34d5d4c15ff9a1417411787c1eb26f4c3c35149f",
+    "name": "BEAT-Heuristi-34d5d",
+    "emoji": "\ud83d\udea8",
+    "level": "CRITICAL",
+    "reason": "Heuristically-flagged hidden operator ammo (large \u226510% circulating + no Arkham label); very likely project reserve / OTC absorption / MM warehouse. Once it starts splitting across addresses / depositing to an exchange / matching on-chain, that is a strong signal the project is starting to dump"
+  },
+  {
+    "address": "0x8c84616281bb4686600090a1aad58543a0e11be1",
+    "name": "BEAT-Heuristi-8c846",
+    "emoji": "\ud83d\udea8",
+    "level": "CRITICAL",
+    "reason": "Heuristically-flagged hidden operator ammo (large \u226510% circulating + no Arkham label); very likely project reserve / OTC absorption / MM warehouse. Once it starts splitting across addresses / depositing to an exchange / matching on-chain, that is a strong signal the project is starting to dump"
+  },
+  {
+    "address": "0x365d028880cf585ebb542d7db613ccd5650f95d7",
+    "name": "BEAT-Heuristi-365d0",
+    "emoji": "\ud83d\udd25",
+    "level": "HIGH",
+    "reason": "Heuristically-flagged hidden operator ammo (large \u226510% circulating + no Arkham label); very likely project reserve / OTC absorption / MM warehouse. Once it starts splitting across addresses / depositing to an exchange / matching on-chain, that is a strong signal the project is starting to dump"
+  }
+]

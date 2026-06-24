@@ -1,8 +1,121 @@
 {
   "schema_version": "0.6.1",
-  "source_symbol": "ARX",
-  "source_contract": "0xd5f6ef5deabe61e6d5cdb49bfb6f156f2c1ca715",
+  "source_symbol": "BEAT",
+  "source_contract": "0xcf3232b85b43bca90e51d38cc06cc8bb8c8a3e36",
   "source_chain": "bsc",
-  "n_wallets": 0,
-  "addresses": []
+  "n_wallets": 6,
+  "addresses": [
+    {
+      "address": "0x05b7721d66e83f8fb236d2ace995f710fd59e718",
+      "chain": "bsc",
+      "label": "BEAT-Heuristi-5b772",
+      "role": "Heuristically-flagged hidden operator ammo (reserve)",
+      "severity": "watch",
+      "alert": "Watch for LP interaction or DEX router swaps. [Role: Heuristically-flagged hidden operator ammo (reserve)]",
+      "source_sym": "BEAT",
+      "source_contract": "0xcf3232b85b43bca90e51d38cc06cc8bb8c8a3e36",
+      "addr_short": "0x05b7721d",
+      "monitor_level": "CRITICAL",
+      "monitor_score": 11,
+      "monitor_role_enum": "suspected_operator_reserve",
+      "monitor_reason": "Heuristically-flagged hidden operator ammo (large \u226510% circulating + no Arkham label); very likely project reserve / OTC absorption / MM warehouse. Once it starts splitting across addresses / depositing to an exchange / matching on-chain, that is a strong signal the project is starting to dump",
+      "source_behaviors": [
+        "A3"
+      ],
+      "trigger_summary": "Tag type: heuristically-flagged hidden operator ammo (\u2265 10% circulating + no Arkham label). The user can watch whether / when these three on-chain behaviours occur: (1) splitting across multiple downstream accounts, (2) transferring into an Arkham-labeled exchange deposit address, (3) on-chain matching (direct transfer-out against USDT/BNB/WBNB etc.). If (2)(3) appear, combine with this report's confirmed sell-out section insider self-sell TWAP to estimate the actual realized USD."
+    },
+    {
+      "address": "0x0793b14b0beb04caf55c5fd48e0e3e7358bf6bb2",
+      "chain": "bsc",
+      "label": "BEAT-Heuristi-793b1",
+      "role": "Heuristically-flagged hidden operator ammo (reserve)",
+      "severity": "watch",
+      "alert": "Track transfers out to exchange or DEX. [Role: Heuristically-flagged hidden operator ammo (reserve)]",
+      "source_sym": "BEAT",
+      "source_contract": "0xcf3232b85b43bca90e51d38cc06cc8bb8c8a3e36",
+      "addr_short": "0x0793b14b",
+      "monitor_level": "CRITICAL",
+      "monitor_score": 11,
+      "monitor_role_enum": "suspected_operator_reserve",
+      "monitor_reason": "Heuristically-flagged hidden operator ammo (large \u226510% circulating + no Arkham label); very likely project reserve / OTC absorption / MM warehouse. Once it starts splitting across addresses / depositing to an exchange / matching on-chain, that is a strong signal the project is starting to dump",
+      "source_behaviors": [
+        "A3"
+      ],
+      "trigger_summary": "Tag type: heuristically-flagged hidden operator ammo (\u2265 10% circulating + no Arkham label). The user can watch whether / when these three on-chain behaviours occur: (1) splitting across multiple downstream accounts, (2) transferring into an Arkham-labeled exchange deposit address, (3) on-chain matching (direct transfer-out against USDT/BNB/WBNB etc.). If (2)(3) appear, combine with this report's confirmed sell-out section insider self-sell TWAP to estimate the actual realized USD."
+    },
+    {
+      "address": "0x1830834fe3742b7e0988968dd50f321250157561",
+      "chain": "bsc",
+      "label": "BEAT-Heuristi-18308",
+      "role": "Heuristically-flagged hidden operator ammo (reserve)",
+      "severity": "watch",
+      "alert": "Alert if wallet starts depositing to CEX. [Role: Heuristically-flagged hidden operator ammo (reserve)]",
+      "source_sym": "BEAT",
+      "source_contract": "0xcf3232b85b43bca90e51d38cc06cc8bb8c8a3e36",
+      "addr_short": "0x1830834f",
+      "monitor_level": "CRITICAL",
+      "monitor_score": 12,
+      "monitor_role_enum": "suspected_operator_reserve",
+      "monitor_reason": "Heuristically-flagged hidden operator ammo (large \u226510% circulating + no Arkham label); very likely project reserve / OTC absorption / MM warehouse. Once it starts splitting across addresses / depositing to an exchange / matching on-chain, that is a strong signal the project is starting to dump",
+      "source_behaviors": [
+        "A3"
+      ],
+      "trigger_summary": "Tag type: heuristically-flagged hidden operator ammo (\u2265 10% circulating + no Arkham label). The user can watch whether / when these three on-chain behaviours occur: (1) splitting across multiple downstream accounts, (2) transferring into an Arkham-labeled exchange deposit address, (3) on-chain matching (direct transfer-out against USDT/BNB/WBNB etc.). If (2)(3) appear, combine with this report's confirmed sell-out section insider self-sell TWAP to estimate the actual realized USD."
+    },
+    {
+      "address": "0x34d5d4c15ff9a1417411787c1eb26f4c3c35149f",
+      "chain": "bsc",
+      "label": "BEAT-Heuristi-34d5d",
+      "role": "Heuristically-flagged hidden operator ammo (reserve)",
+      "severity": "watch",
+      "alert": "Monitor active balance adjustments. [Role: Heuristically-flagged hidden operator ammo (reserve)]",
+      "source_sym": "BEAT",
+      "source_contract": "0xcf3232b85b43bca90e51d38cc06cc8bb8c8a3e36",
+      "addr_short": "0x34d5d4c1",
+      "monitor_level": "CRITICAL",
+      "monitor_score": 11,
+      "monitor_role_enum": "suspected_operator_reserve",
+      "monitor_reason": "Heuristically-flagged hidden operator ammo (large \u226510% circulating + no Arkham label); very likely project reserve / OTC absorption / MM warehouse. Once it starts splitting across addresses / depositing to an exchange / matching on-chain, that is a strong signal the project is starting to dump",
+      "source_behaviors": [
+        "A3"
+      ],
+      "trigger_summary": "Tag type: heuristically-flagged hidden operator ammo (\u2265 10% circulating + no Arkham label). The user can watch whether / when these three on-chain behaviours occur: (1) splitting across multiple downstream accounts, (2) transferring into an Arkham-labeled exchange deposit address, (3) on-chain matching (direct transfer-out against USDT/BNB/WBNB etc.). If (2)(3) appear, combine with this report's confirmed sell-out section insider self-sell TWAP to estimate the actual realized USD."
+    },
+    {
+      "address": "0x8c84616281bb4686600090a1aad58543a0e11be1",
+      "chain": "bsc",
+      "label": "BEAT-Heuristi-8c846",
+      "role": "Heuristically-flagged hidden operator ammo (reserve)",
+      "severity": "watch",
+      "alert": "Monitor large outflows to deposit hubs. [Role: Heuristically-flagged hidden operator ammo (reserve)]",
+      "source_sym": "BEAT",
+      "source_contract": "0xcf3232b85b43bca90e51d38cc06cc8bb8c8a3e36",
+      "addr_short": "0x8c846162",
+      "monitor_level": "CRITICAL",
+      "monitor_score": 11,
+      "monitor_role_enum": "suspected_operator_reserve",
+      "monitor_reason": "Heuristically-flagged hidden operator ammo (large \u226510% circulating + no Arkham label); very likely project reserve / OTC absorption / MM warehouse. Once it starts splitting across addresses / depositing to an exchange / matching on-chain, that is a strong signal the project is starting to dump",
+      "source_behaviors": [
+        "A3"
+      ],
+      "trigger_summary": "Tag type: heuristically-flagged hidden operator ammo (\u2265 10% circulating + no Arkham label). The user can watch whether / when these three on-chain behaviours occur: (1) splitting across multiple downstream accounts, (2) transferring into an Arkham-labeled exchange deposit address, (3) on-chain matching (direct transfer-out against USDT/BNB/WBNB etc.). If (2)(3) appear, combine with this report's confirmed sell-out section insider self-sell TWAP to estimate the actual realized USD."
+    },
+    {
+      "address": "0x365d028880cf585ebb542d7db613ccd5650f95d7",
+      "chain": "bsc",
+      "label": "BEAT-Heuristi-365d0",
+      "role": "Heuristically-flagged hidden operator ammo (reserve)",
+      "severity": "watch",
+      "alert": "Watch for CEX deposits and DEX sell matches. [Role: Heuristically-flagged hidden operator ammo (reserve)]",
+      "source_sym": "BEAT",
+      "source_contract": "0xcf3232b85b43bca90e51d38cc06cc8bb8c8a3e36",
+      "addr_short": "0x365d0288",
+      "monitor_level": "HIGH",
+      "monitor_score": 7,
+      "monitor_role_enum": "suspected_operator_reserve",
+      "monitor_reason": "Heuristically-flagged hidden operator ammo (large \u226510% circulating + no Arkham label); very likely project reserve / OTC absorption / MM warehouse. Once it starts splitting across addresses / depositing to an exchange / matching on-chain, that is a strong signal the project is starting to dump",
+      "source_behaviors": [],
+      "trigger_summary": "Tag type: heuristically-flagged hidden operator ammo (\u2265 10% circulating + no Arkham label). The user can watch whether / when these three on-chain behaviours occur: (1) splitting across multiple downstream accounts, (2) transferring into an Arkham-labeled exchange deposit address, (3) on-chain matching (direct transfer-out against USDT/BNB/WBNB etc.). If (2)(3) appear, combine with this report's confirmed sell-out section insider self-sell TWAP to estimate the actual realized USD."
+    }
+  ]
 }
