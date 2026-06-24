@@ -5,3 +5,5 @@ __pycache__/
 .work/
 *.log
 *.err
+.agents/
+scratch/
